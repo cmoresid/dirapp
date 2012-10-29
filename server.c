@@ -38,7 +38,9 @@
 // Global variables
 pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 sigset_t mask;
-struct client_thread* clients;
+char init_dir[PATH_MAX];
+struct client* clients;
+int gperiod;
 
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
@@ -201,23 +203,54 @@ void create_daemon(const char* name) {
 
 void* signal_thread(void* arg) {
     int err, signo;
+	pthread_t tid;
+    int period = (int) arg;
 
     for (;;) {
+        // Check directory for updates
+        alarm(period);
+
         err = sigwait(&mask, &signo);
+        if (err != 0) {
+            syslog(LOG_ERR, "sigwait failed");
+            exit(1);
+        }
+
+        switch (signo) {
+            case SIGHUP:
+                // Finish transfers, remove all clients
+                syslog(LOG_INFO, "Received SIGHUP");
+                break;
+            case SIGALRM:
+                // See if directory has updated
+                syslog(LOG_INFO, "Received SIGALRM");
+				pthread_create(&tid, NULL, send_updates, NULL);
+                break;
+            case SIGTERM:
+                // Same as SIGHUP, then quit
+                syslog(LOG_INFO, "Received SIGTERM"); 
+                break;
+            default:
+                // Finish transfers, quit
+                syslog(LOG_ERR, "Unexpected signal: %d", signo);
+                exit(1);
+                break;
+        }
     }
 }
 
-void add_client(pthread_t tid, int socketfd) {
-    struct client_thread *ct;
+void add_client_ref(int socketfd) {
+    struct client *ct;
 
-    ct = (struct client_thread*)malloc(sizeof(struct client_thread));
+    ct = (struct client*) malloc(sizeof(struct client));
     if (ct == NULL) {
         syslog(LOG_ERR, "Cannot malloc new client thread");
         pthread_exit((void*)1);
     }
-
-    ct->tid = tid;
+	ct->c_lock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+	pthread_mutex_init(ct->c_lock, NULL);
     ct->socket = socketfd;
+
     // LOCK
     pthread_mutex_lock(&clients_lock);
     ct->prev = NULL;
@@ -229,17 +262,144 @@ void add_client(pthread_t tid, int socketfd) {
         clients->prev = ct;
     }    
     // UNLOCK
-    pthread_mutex_lock(&clients_lock);
+    pthread_mutex_unlock(&clients_lock);
 }
 
-void* handle_client(void* arg) {
+void* send_updates(void* arg) {
+	struct client* p;
+	p = clients;
+	
+	// Get dir contents
+	// Check differences
+	
+	if (1) { // There are differences
+		while (p != NULL) {
+			// LOCK
+			pthread_mutex_lock(p->c_lock);
+			
+			if (send_string(p->socket, "Update") != 6) {
+				syslog(LOG_ERR, "Could not send update");
+				exit(1);
+			}
+			// UNLOCK
+			pthread_mutex_unlock(p->c_lock);
+			
+			p = p->next;
+		}
+	}
+}
+
+void* init_client(void* arg) {
     pthread_t tid;
     int socketfd;
+    size_t len;
 
     tid = pthread_self();
     socketfd = (int) arg;
+    len = strlen(init_dir);
+
+    add_client_ref(socketfd);
+
+	if (send_byte(socketfd, INIT_CLIENT1) != 1) {
+		syslog(LOG_WARNING, "Cannot send init client 1");
+		exit(1);
+	}
+	
+	if (send_byte(socketfd, INIT_CLIENT2) != 1) {
+		syslog(LOG_WARNING, "Cannot send init client 2");
+		exit(1);
+	}
+	
+	if (send_string(socketfd, init_dir) != len) {
+		syslog(LOG_WARNING, "Cannot send path directory");
+		exit(1);
+	}
+	
+	if (send_byte(socketfd, gperiod) != 1) {
+		syslog(LOG_WARNING, "Cannot send period");
+		exit(1);
+	}
 
     syslog(LOG_INFO, "Spawned new thread to handle client!");
+}
+
+struct client* find_client_ref(int socketfd) {
+	struct client* p;
+	p = clients;
+	
+	while (p != NULL) {
+		if (p->socket == socketfd) {
+			return p;
+		}
+		
+		p = p->next;
+	}
+	
+	return NULL;
+}
+
+void remove_client_ref(int socketfd) {
+	struct client* ct;
+	struct client* tmp;
+	
+	if ( (ct = find_client_ref(socketfd)) == NULL ) {
+		syslog(LOG_ERR, "Could not find client.");
+		exit(1);
+	}
+	
+	// LOCK
+	pthread_mutex_lock(&clients_lock);
+	pthread_mutex_lock(ct->c_lock);
+	
+	if (ct == clients) {
+		clients = clients->next;
+	} else if (ct->next == NULL) {
+		ct->prev->next = NULL;
+	} else {
+		tmp = ct->next;
+		tmp->prev = ct->prev;
+		ct->prev->next = tmp;
+	}
+	// UNLOCK
+	pthread_mutex_unlock(ct->c_lock);
+	pthread_mutex_unlock(&clients_lock);	
+	
+	// Deallocate client now
+	ct->prev = NULL;
+	ct->next = NULL;
+	pthread_mutex_destroy(ct->c_lock);
+	free(ct->c_lock);
+	free(ct);
+}
+
+void* remove_client(void* arg) {
+	int socketfd = (int) arg;
+	byte b;
+	
+	// Will block until mutex is released
+	remove_client_ref(arg);
+	
+	if ( (b = read_byte(socketfd)) != REQ_REMOVE1) {
+		syslog(LOG_ERR, "Anticipated 0xDE: Received: 0x%x", b);
+		close(socketfd);
+	}
+			
+	if ( (b = read_byte(socketfd)) != REQ_REMOVE2) {
+		syslog(LOG_ERR, "Anticipated 0xAD: Received: 0x%x", b);
+		close(socketfd);
+	}
+			
+	if (send_byte(socketfd, END_COM) != 1) {
+		syslog(LOG_ERR, "Could not send byte!");
+		close(socketfd);
+	}
+			
+	if (send_string(socketfd, GOOD_BYE) != 7) {
+		syslog(LOG_ERR, "Could not send string");
+		close(socketfd);
+	}
+
+	close(socketfd);
 }
 
 int start_server(int port_number, const char* dir_name, int period) {
@@ -261,6 +421,9 @@ int start_server(int port_number, const char* dir_name, int period) {
     sa.sa_flags = 0;
     sa.sa_handler = SIG_IGN;
 
+    strcpy(init_dir, dir_name);
+    gperiod = period;
+
     char full_path[PATH_MAX];
     if (realpath(dir_name, full_path) == NULL) {
         syslog(LOG_ERR, "Cannot resolve full path.");
@@ -281,6 +444,7 @@ int start_server(int port_number, const char* dir_name, int period) {
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
     sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGALRM);
 
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
         syslog(LOG_WARNING, "pthread_sigmask failed");
@@ -313,9 +477,9 @@ int start_server(int port_number, const char* dir_name, int period) {
     list = exploredir((const char*) full_path);
     print_direntrylist(list);
     syslog(LOG_INFO, "Number of entries: %i", list->count);
-
+    
     // Create thread to handle signals
-    pthread_create(&tid, NULL, signal_thread, NULL);
+    pthread_create(&tid, NULL, signal_thread, (void*)period);
 
     // Main server loop
     while (1) {
@@ -344,10 +508,13 @@ int start_server(int port_number, const char* dir_name, int period) {
                                 inet_ntoa(remote_addr.sin_addr),
                                 ntohs(remote_addr.sin_port));
                         // SPAWN NEW THREAD HERE
-                        pthread_create(&tid, NULL, handle_client, (void*)newfd);
+                        pthread_create(&tid, NULL, init_client, (void*)newfd);
                     }
-
-                }
+                } else {
+					// Handle disconnect
+					pthread_create(&tid, NULL, remove_client, (void*)i);
+					FD_CLR(i, &master);
+				}
             }
         }
     }

@@ -16,4 +16,11 @@
  * =====================================================================================
  */
 
+#ifndef CLIENT_H
+
+#include "common.h"
+
 int start_client();
+int disconnect_from_server(int socketfd);
+
+#endif // CLIENT_H

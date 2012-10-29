@@ -19,11 +19,13 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-struct client_thread {
-    struct client_thread* next;
-    struct client_thread* prev;
-    pthread_t tid;
+#include <pthread.h>
+
+struct client {
+    struct client* next;
+    struct client* prev;
     int socket;
+	pthread_mutex_t* c_lock;
 };
 
 struct direntrylist {
@@ -37,6 +39,10 @@ struct direntry {
     struct stat* attrs;
     struct direntry* next;
 };
+
+struct client* find_client(int socketfd);
+
+void* send_updates(void* arg);
 
 /* 
  * ===  FUNCTION  ======================================================================
@@ -64,20 +70,35 @@ void* signal_thread(void* arg);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  handle_client
+ *         Name:  init_client
  *  Description:  Handles a client on a separate thread.
  * =====================================================================================
  */
-void* handle_client(void* arg);
+void* init_client(void* arg);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  add_client
- *  Description:  Adds new client thread to list of clients.
+ *         Name:  remove_client
+ *  Description:  Handles a client on a separate thread.
  * =====================================================================================
  */
-void add_client(pthread_t tid, int socketfd);
+void* remove_client(void* arg);
 
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  add_client_ref
+ *  Description:  Adds new client to a list of clients.
+ * =====================================================================================
+ */
+void add_client_ref(int socketfd);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  remove_client_ref
+ *  Description:  Removes a client from a list of clients.
+ * =====================================================================================
+ */
+void remove_client_ref(int socketfd);
 
 /* 
  * ===  FUNCTION  ======================================================================
