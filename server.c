@@ -39,7 +39,7 @@
 pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 sigset_t mask;
 char init_dir[PATH_MAX];
-struct client* clients;
+struct clientlist* clients;
 int gperiod;
 
 struct direntrylist* init_direntrylist() {
@@ -242,6 +242,12 @@ void* signal_thread(void* arg) {
 void add_client_ref(int socketfd) {
     struct client *ct;
 
+	if (clients == NULL) {
+		clients = (struct clientlist*) malloc(sizeof(struct clientlist));
+		clients->head = NULL;
+		clients->tail = NULL;
+	}
+
     ct = (struct client*) malloc(sizeof(struct client));
     if (ct == NULL) {
         syslog(LOG_ERR, "Cannot malloc new client thread");
@@ -253,24 +259,36 @@ void add_client_ref(int socketfd) {
 
     // LOCK
     pthread_mutex_lock(&clients_lock);
-    ct->prev = NULL;
-    ct->next = clients;
+	ct->next = NULL;
+	ct->prev = NULL;
 
-    if (clients == NULL) {
-        clients = ct;
-    } else {
-        clients->prev = ct;
-    }    
+	if (clients->head == NULL) {
+		clients->head = ct;
+		clients->tail = clients->head;
+	} else if (clients->head == clients->tail) {
+		clients->head->next = ct;
+		ct->prev = clients->head;
+		clients->tail = clients->head->next;
+	} else {
+		clients->tail->next = ct;
+		ct->prev = clients->tail;
+		clients->tail = ct;
+	}
+
     // UNLOCK
     pthread_mutex_unlock(&clients_lock);
 }
 
 void* send_updates(void* arg) {
 	struct client* p;
-	p = clients;
+	p = clients->head;
 	
 	// Get dir contents
 	// Check differences
+	
+	// Make sure clients is not changed when sending updates
+	// LOCK
+	pthread_mutex_lock(&clients_lock);
 	
 	if (1) { // There are differences
 		while (p != NULL) {
@@ -287,6 +305,10 @@ void* send_updates(void* arg) {
 			p = p->next;
 		}
 	}
+	// UNLOCK
+	pthread_mutex_unlock(&clients_lock);
+	
+	return ((void*) 0);
 }
 
 void* init_client(void* arg) {
@@ -342,24 +364,29 @@ void remove_client_ref(int socketfd) {
 	struct client* ct;
 	struct client* tmp;
 	
+	// LOCK
+	pthread_mutex_lock(&clients_lock);
+	
 	if ( (ct = find_client_ref(socketfd)) == NULL ) {
 		syslog(LOG_ERR, "Could not find client.");
 		exit(1);
 	}
 	
-	// LOCK
-	pthread_mutex_lock(&clients_lock);
+	// If lock is currently locked, maybe client is trying to send
+	// out data. Wait until lock is aquired.
 	pthread_mutex_lock(ct->c_lock);
 	
-	if (ct == clients) {
-		clients = clients->next;
-	} else if (ct->next == NULL) {
-		ct->prev->next = NULL;
+	if (ct == clients->head) {
+		clients->head = clients->head->next;
+	} else if (ct == clients->tail) {
+		clients->tail = ct->prev;
+		clients->tail->next = NULL;
 	} else {
 		tmp = ct->next;
-		tmp->prev = ct->prev;
 		ct->prev->next = tmp;
+		tmp->prev = ct->prev;
 	}
+
 	// UNLOCK
 	pthread_mutex_unlock(ct->c_lock);
 	pthread_mutex_unlock(&clients_lock);	
@@ -377,7 +404,7 @@ void* remove_client(void* arg) {
 	byte b;
 	
 	// Will block until mutex is released
-	remove_client_ref(arg);
+	remove_client_ref(socketfd);
 	
 	if ( (b = read_byte(socketfd)) != REQ_REMOVE1) {
 		syslog(LOG_ERR, "Anticipated 0xDE: Received: 0x%x", b);

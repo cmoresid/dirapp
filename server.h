@@ -23,9 +23,14 @@
 
 struct client {
     struct client* next;
-    struct client* prev;
+	struct client* prev;
     int socket;
 	pthread_mutex_t* c_lock;
+};
+
+struct clientlist {
+	struct client* head;
+	struct client* tail;
 };
 
 struct direntrylist {
