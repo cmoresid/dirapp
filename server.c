@@ -35,11 +35,15 @@
 #include "server.h"
 #include "common.h"
 
-// Global variables
+/* Ensures mutual exclusion for clients linked list */
 pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Shared mask for all threads */
 sigset_t mask;
+/* The name/path of the directory, as passed in the commandline argument */
 char init_dir[PATH_MAX];
+/* Represents all the currently connected clients */
 struct clientlist* clients;
+/* The period to monitor the directory */
 int gperiod;
 
 struct direntrylist* init_direntrylist() {
@@ -60,13 +64,13 @@ int add_direntry(struct direntrylist* list, struct direntry* entry) {
     if (list == NULL)
         return -1;
 
-    if (list->head == NULL) {
-        list->head = entry;
+    if (list->head == NULL) {               // List is emptry
+        list->head = entry; 
         list->tail = list->head;
-    } else if (list->head->next == NULL) {
+    } else if (list->head->next == NULL) {  // 1 item in list
         list->head->next = entry;
         list->tail = list->head->next;
-    } else {
+    } else {       							// More than 1 item                   
         list->tail->next = entry;
         list->tail = entry;
     }
@@ -76,6 +80,7 @@ int add_direntry(struct direntrylist* list, struct direntry* entry) {
     return 1;
 }
 
+// Debugging purposes
 void print_direntrylist(struct direntrylist* list) {
     struct direntry* p = list->head;
 
@@ -239,46 +244,6 @@ void* signal_thread(void* arg) {
     }
 }
 
-void add_client_ref(int socketfd) {
-    struct client *ct;
-
-	if (clients == NULL) {
-		clients = (struct clientlist*) malloc(sizeof(struct clientlist));
-		clients->head = NULL;
-		clients->tail = NULL;
-	}
-
-    ct = (struct client*) malloc(sizeof(struct client));
-    if (ct == NULL) {
-        syslog(LOG_ERR, "Cannot malloc new client thread");
-        pthread_exit((void*)1);
-    }
-	ct->c_lock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
-	pthread_mutex_init(ct->c_lock, NULL);
-    ct->socket = socketfd;
-
-    // LOCK
-    pthread_mutex_lock(&clients_lock);
-	ct->next = NULL;
-	ct->prev = NULL;
-
-	if (clients->head == NULL) {
-		clients->head = ct;
-		clients->tail = clients->head;
-	} else if (clients->head == clients->tail) {
-		clients->head->next = ct;
-		ct->prev = clients->head;
-		clients->tail = clients->head->next;
-	} else {
-		clients->tail->next = ct;
-		ct->prev = clients->tail;
-		clients->tail = ct;
-	}
-
-    // UNLOCK
-    pthread_mutex_unlock(&clients_lock);
-}
-
 void* send_updates(void* arg) {
 	struct client* p;
 	p = clients->head;
@@ -286,7 +251,6 @@ void* send_updates(void* arg) {
 	// Get dir contents
 	// Check differences
 	
-	// Make sure clients is not changed when sending updates
 	// LOCK
 	pthread_mutex_lock(&clients_lock);
 	
@@ -343,21 +307,78 @@ void* init_client(void* arg) {
 	}
 
     syslog(LOG_INFO, "Spawned new thread to handle client!");
+	return ((void*) 0);
 }
 
-struct client* find_client_ref(int socketfd) {
-	struct client* p;
-	p = clients;
+void* remove_client(void* arg) {
+	int socketfd = (int) arg;
+	byte b;
 	
-	while (p != NULL) {
-		if (p->socket == socketfd) {
-			return p;
-		}
-		
-		p = p->next;
+	// Will block until mutex is released
+	remove_client_ref(socketfd);
+	
+	if ( (b = read_byte(socketfd)) != REQ_REMOVE1) {
+		syslog(LOG_ERR, "Anticipated 0xDE: Received: 0x%x", b);
+		close(socketfd);
 	}
-	
-	return NULL;
+			
+	if ( (b = read_byte(socketfd)) != REQ_REMOVE2) {
+		syslog(LOG_ERR, "Anticipated 0xAD: Received: 0x%x", b);
+		close(socketfd);
+	}
+			
+	if (send_byte(socketfd, END_COM) != 1) {
+		syslog(LOG_ERR, "Could not send byte!");
+		close(socketfd);
+	}
+			
+	if (send_string(socketfd, GOOD_BYE) != 7) {
+		syslog(LOG_ERR, "Could not send string");
+		close(socketfd);
+	}
+
+	close(socketfd);
+	return ((void*) 0);
+}
+
+void add_client_ref(int socketfd) {
+    struct client *ct;
+
+	if (clients == NULL) {
+		clients = (struct clientlist*) malloc(sizeof(struct clientlist));
+		clients->head = NULL;
+		clients->tail = NULL;
+	}
+
+    ct = (struct client*) malloc(sizeof(struct client));
+    if (ct == NULL) {
+        syslog(LOG_ERR, "Cannot malloc new client thread");
+        pthread_exit((void*)1);
+    }
+	ct->c_lock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+	pthread_mutex_init(ct->c_lock, NULL);
+    ct->socket = socketfd;
+
+    // LOCK
+    pthread_mutex_lock(&clients_lock);
+	ct->next = NULL;
+	ct->prev = NULL;
+
+	if (clients->head == NULL) {
+		clients->head = ct;
+		clients->tail = clients->head;
+	} else if (clients->head == clients->tail) {
+		clients->head->next = ct;
+		ct->prev = clients->head;
+		clients->tail = clients->head->next;
+	} else {
+		clients->tail->next = ct;
+		ct->prev = clients->tail;
+		clients->tail = ct;
+	}
+
+    // UNLOCK
+    pthread_mutex_unlock(&clients_lock);
 }
 
 void remove_client_ref(int socketfd) {
@@ -399,34 +420,19 @@ void remove_client_ref(int socketfd) {
 	free(ct);
 }
 
-void* remove_client(void* arg) {
-	int socketfd = (int) arg;
-	byte b;
+struct client* find_client_ref(int socketfd) {
+	struct client* p;
+	p = clients->head;
 	
-	// Will block until mutex is released
-	remove_client_ref(socketfd);
+	while (p != NULL) {
+		if (p->socket == socketfd) {
+			return p;
+		}
+		
+		p = p->next;
+	}
 	
-	if ( (b = read_byte(socketfd)) != REQ_REMOVE1) {
-		syslog(LOG_ERR, "Anticipated 0xDE: Received: 0x%x", b);
-		close(socketfd);
-	}
-			
-	if ( (b = read_byte(socketfd)) != REQ_REMOVE2) {
-		syslog(LOG_ERR, "Anticipated 0xAD: Received: 0x%x", b);
-		close(socketfd);
-	}
-			
-	if (send_byte(socketfd, END_COM) != 1) {
-		syslog(LOG_ERR, "Could not send byte!");
-		close(socketfd);
-	}
-			
-	if (send_string(socketfd, GOOD_BYE) != 7) {
-		syslog(LOG_ERR, "Could not send string");
-		close(socketfd);
-	}
-
-	close(socketfd);
+	return NULL;
 }
 
 int start_server(int port_number, const char* dir_name, int period) {
@@ -534,12 +540,13 @@ int start_server(int port_number, const char* dir_name, int period) {
                         syslog(LOG_INFO, "New connection from: %s:%d",
                                 inet_ntoa(remote_addr.sin_addr),
                                 ntohs(remote_addr.sin_port));
-                        // SPAWN NEW THREAD HERE
-                        pthread_create(&tid, NULL, init_client, (void*)newfd);
+                        // Add client to clients list in order to receive
+						// updates
+                        pthread_create(&tid, NULL, init_client, (void*) newfd);
                     }
                 } else {
 					// Handle disconnect
-					pthread_create(&tid, NULL, remove_client, (void*)i);
+					pthread_create(&tid, NULL, remove_client, (void*) i);
 					FD_CLR(i, &master);
 				}
             }

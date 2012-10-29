@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <netinet/in.h>
+#include <unistd.h>
 
 #include "client.h"
 #include "common.h"
@@ -127,6 +128,7 @@ int disconnect_from_server(int socketfd) {
 	}
 	
 	printf("%s\n", buff);
+	close(socketfd);
 	
 	return 0;
 }
