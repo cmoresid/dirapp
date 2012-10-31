@@ -20,6 +20,7 @@
 #define SERVER_H
 
 #include <pthread.h>
+#include "common.h"
 
 /* Ensure mutual exclusion for clients (defined in server.c) */
 extern pthread_mutex_t clients_lock;
@@ -52,6 +53,10 @@ struct direntrylist {
     struct direntry* head;
     struct direntry* tail;
 };
+
+int difference_direntrylist();
+int find_checked(const int* checked, int size, int addr);
+
 
 /* 
  * ===  FUNCTION  ======================================================================

@@ -234,6 +234,11 @@ void* init_server(void* arg) {
 	size_t len;
 	int results[1];
 	
+	if (servers->count == MAX_SERVERS) {
+		printf("\n\t Cannot connect to any more servers.\n");
+		pthread_exit((void*)1);
+	}
+	
 	server_args = (struct thread_arg*) arg;
 	tmp = strtok(server_args->buff, " ");
 	len = strlen(tmp);

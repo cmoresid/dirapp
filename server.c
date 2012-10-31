@@ -41,10 +41,16 @@ pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 sigset_t mask;
 /* The name/path of the directory, as passed in the commandline argument */
 char init_dir[PATH_MAX];
+/* The full path to the directory */
+char full_path[PATH_MAX];
 /* Represents all the currently connected clients */
 struct clientlist* clients;
+/* The previous contents/attributes of directory being monitored */
+struct direntrylist* prevdir;
 /* The period to monitor the directory */
 int gperiod;
+/* The update buffer */
+byte update_buff[1024];
 
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
@@ -58,6 +64,28 @@ struct direntrylist* init_direntrylist() {
     list->tail = NULL;
 
     return list;
+}
+
+int free_direntrylist(struct direntrylist* list) {
+	struct direntry* p;
+	struct direntry* tmp;
+	p = list->head;
+	list->head = NULL;
+	list->tail = NULL;
+	
+	while (p != NULL) {
+		// Free attributes
+		free(p->filename);
+		free(p->attrs);
+		// Hold on to next reference
+		tmp = p->next;
+		free(p);
+		p = tmp;
+	}
+	
+	free(list);
+	
+	return 0;
 }
 
 int add_direntry(struct direntrylist* list, struct direntry* entry) {
@@ -170,6 +198,187 @@ struct direntrylist* exploredir(const char* path) {
     return list;
 }
 
+// Returns how many differences
+int difference_direntrylist() {
+	int ndiffs;
+	byte buff[128];
+	struct direntrylist* curdir;
+	struct direntry* entry_prev;
+	struct direntry* entry_cur;
+	int i;
+	int i_buff;
+	size_t len;
+	int* checked;
+	
+	syslog(LOG_INFO, "Inside differency_direntrylist");
+	
+	curdir = exploredir((const char*) full_path); /* Global variable: full_path */
+	checked = (int*) malloc((curdir->count+prevdir->count)*sizeof(int));  /* Global variable: prevdir */
+	
+	if (curdir->count == 0 && prevdir->count == 0) {
+		return 0;
+	}
+	
+	i = 0;
+	i_buff = 1;
+	
+	// WHEN YOUR NOT SO TIRED, MAKE SURE YOU DO A PROPER BOUNDS
+	// CHECK ON COPYING INTO THE BUFF buffer.
+	
+	entry_prev = prevdir->head;
+	while (entry_prev != NULL) {
+		if ( (entry_cur = find_direntry(curdir, entry_prev)) != NULL 
+				&& find_checked(checked, i, entry_prev) == 0) {
+			// UID
+			if (entry_prev->attrs->st_uid != entry_cur->attrs->st_uid) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff+1, "! ");
+				strcat(buff+3, entry_prev->filename);
+				strcat(buff+3+len, " UID has changed");
+				len = strlen(buff+1);
+				buff[0] = len;
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				ndiffs++;
+			}
+			// GID
+			if (entry_prev->attrs->st_gid != entry_cur->attrs->st_gid) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff+1, "! ");
+				strcat(buff+3, entry_prev->filename);
+				strcat(buff+3+len, " GID has changed");
+				len = strlen(buff+1);
+				buff[0] = len;
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				ndiffs++;
+			}
+			// Size
+			if (entry_prev->attrs->st_size != entry_cur->attrs->st_size) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff+1, "! ");
+				strcat(buff+3, entry_prev->filename);
+				strcat(buff+3+len, " Size has changed");
+				len = strlen(buff+1);
+				buff[0] = len;
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				ndiffs++;
+			}
+			// Access time
+			if (entry_prev->attrs->st_atime != entry_cur->attrs->st_atime) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff+1, "! ");
+				strcat(buff+3, entry_prev->filename);
+				strcat(buff+3+len, " Last access time has changed");
+				len = strlen(buff+1);
+				buff[0] = len;
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				ndiffs++;
+			}
+			// Modified time
+			if (entry_prev->attrs->st_mtime != entry_cur->attrs->st_mtime) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff+1, "! ");
+				strcat(buff+3, entry_prev->filename);
+				strcat(buff+3+len, " Last modification time has changed");
+				len = strlen(buff+1);
+				buff[0] = len;
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				ndiffs++;
+			}
+			// File status time
+			if (entry_prev->attrs->st_ctime != entry_cur->attrs->st_ctime) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff+1, "! ");
+				strcat(buff+3, entry_prev->filename);
+				strcat(buff+3+len, " Last file status time has changed");
+				len = strlen(buff+1);
+				buff[0] = len;
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				ndiffs++;
+			}
+			
+			checked[i++] = entry_prev;
+			checked[i++] = entry_cur;
+		} else {
+			memset(buff, 0, sizeof(buff));
+			len = strlen(entry_prev->filename);
+			strcat(buff+1, "- ");
+			strcat(buff+3, entry_prev->filename);
+			strcat(buff+3+len, " Removed");
+			len = strlen(buff+1);
+			buff[0] = len;
+			
+			strcpy(update_buff+i_buff, buff);
+			
+			i_buff += len+1;
+			ndiffs++;
+		}
+		
+		entry_prev = entry_prev->next;
+	}
+	
+	entry_cur = curdir->head;
+	while (entry_cur != NULL) {
+		if (find_checked(checked, i, entry_cur) == 0) {
+			memset(buff, 0, sizeof(buff));
+			len = strlen(entry_cur->filename);
+			strcat(buff+1, "+ ");
+			strcat(buff+3, entry_cur->filename);
+			strcat(buff+3+len, " Added");
+			len = strlen(buff+1);
+			buff[0] = len;
+			
+			strcpy(update_buff+i_buff, buff);
+			
+			i_buff += len+1;
+			ndiffs++;
+		}
+		
+		entry_cur = entry_cur->next;
+	}
+	
+	update_buff[0] = ndiffs;
+	
+	free_direntrylist(prevdir);
+	prevdir = curdir;
+	
+	return ndiffs;
+}
+
+int find_checked(const int* checked, int size, int addr) {
+	int i;
+	for (i = 0; i < size; i++) {
+		if (checked[i] == addr) {
+			return 1;
+		}
+	}
+	
+	return 0;
+}
+
 void create_daemon(const char* name) {
 	pid_t pid;
 	struct rlimit rl;
@@ -238,7 +447,7 @@ static void* signal_thread(void* arg) {
             default:
                 // Finish transfers, quit
                 syslog(LOG_ERR, "Unexpected signal: %d", signo);
-                exit(1);
+                //exit(1);
                 break;
         }
     }
@@ -246,10 +455,12 @@ static void* signal_thread(void* arg) {
 
 void* send_updates(void* arg) {
 	struct client* p;
-	p = clients->head;
+	int diffs;
 	
-	// Get dir contents
-	// Check differences
+	p = clients->head;
+	diffs = difference_direntrylist();
+	
+	//syslog(LOG_INFO, "Number of updates: %d", diffs);
 	
 	// LOCK
 	pthread_mutex_lock(&clients_lock);
@@ -452,7 +663,6 @@ struct client* find_client_ref(int socketfd) {
 
 int start_server(int port_number, const char* dir_name, int period) {
     pthread_t tid;
-    struct direntrylist* list;
     
     fd_set master;
     fd_set read_fds;
@@ -477,7 +687,6 @@ int start_server(int port_number, const char* dir_name, int period) {
     strcpy(init_dir, dir_name);
     gperiod = period;
 
-    char full_path[PATH_MAX];
     if (realpath(dir_name, full_path) == NULL) {
         syslog(LOG_ERR, "Cannot resolve full path.");
         exit(1);
@@ -527,9 +736,9 @@ int start_server(int port_number, const char* dir_name, int period) {
     FD_SET(listener, &master);
     fdmax = listener;
 
-    list = exploredir((const char*) full_path);
-    print_direntrylist(list);
-    syslog(LOG_INFO, "Number of entries: %i", list->count);
+    prevdir = exploredir((const char*) full_path);
+    print_direntrylist(prevdir);
+    syslog(LOG_INFO, "Number of entries: %i", prevdir->count);
     
     // Create thread to handle signals
     pthread_create(&tid, NULL, signal_thread, (void*)period);

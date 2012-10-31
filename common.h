@@ -28,8 +28,8 @@
 #define END_COM			0xFF	 	/* Ends communication. */
 #define GOOD_BYE		"Goodbye"	/* Goodbye! */
 
-#define	MAX_CLIENTS     10		 	/* Max number of clients. */
-#define MAX_SERVERS     5        	/* Max number of servers running concurrently. */
+#define	MAX_CLIENTS     10		 	/* Max number of clients a server talk with */
+#define MAX_SERVERS     5        	/* Max number of servers a client can talk to. */
 
 #define BUFF_MAX        256
 
