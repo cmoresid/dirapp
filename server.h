@@ -36,6 +36,7 @@ struct client {
 struct clientlist {
 	struct client* head;
 	struct client* tail;
+	int count;
 };
 
 /* Contains information about directory items. */
@@ -98,7 +99,7 @@ int start_server(int port_number, const char* dir_name, int period);
  *      Returns:  void
  * =====================================================================================
  */
-void* signal_thread(void* arg);
+static void* signal_thread(void* arg);
 
 /* 
  * ===  FUNCTION  ======================================================================

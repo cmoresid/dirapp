@@ -206,7 +206,7 @@ void create_daemon(const char* name) {
     openlog(name, LOG_CONS, LOG_DAEMON);
 }
 
-void* signal_thread(void* arg) {
+static void* signal_thread(void* arg) {
     int err, signo;
 	pthread_t tid;
     int period = (int) arg;
@@ -284,6 +284,13 @@ void* init_client(void* arg) {
     socketfd = (int) arg;
     len = strlen(init_dir);
 
+	if (clients->count == MAX_CLIENTS) {
+		syslog(LOG_INFO, "No more clients can be accepted.");
+		//send_error("No more clients can be accepted");
+		//close(socketfd);
+		//pthread_exit((void*)1);
+	}
+
     add_client_ref(socketfd);
 
 	if (send_byte(socketfd, INIT_CLIENT1) != 1) {
@@ -348,12 +355,13 @@ void add_client_ref(int socketfd) {
 		clients = (struct clientlist*) malloc(sizeof(struct clientlist));
 		clients->head = NULL;
 		clients->tail = NULL;
+		clients->count = 0;
 	}
 
     ct = (struct client*) malloc(sizeof(struct client));
     if (ct == NULL) {
         syslog(LOG_ERR, "Cannot malloc new client thread");
-        pthread_exit((void*)1);
+		return;
     }
 	ct->c_lock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
 	pthread_mutex_init(ct->c_lock, NULL);
@@ -376,6 +384,8 @@ void add_client_ref(int socketfd) {
 		ct->prev = clients->tail;
 		clients->tail = ct;
 	}
+	
+	clients->count++;
 
     // UNLOCK
     pthread_mutex_unlock(&clients_lock);
@@ -397,10 +407,13 @@ void remove_client_ref(int socketfd) {
 	// out data. Wait until lock is aquired.
 	pthread_mutex_lock(ct->c_lock);
 	
-	if (ct == clients->head) {
+	if (clients->count == 1) {
+		clients->head = clients->head->next;
+		clients->tail = clients->head;
+	} else if (ct == clients->head) {
 		clients->head = clients->head->next;
 	} else if (ct == clients->tail) {
-		clients->tail = ct->prev;
+		clients->tail = clients->tail->prev;
 		clients->tail->next = NULL;
 	} else {
 		tmp = ct->next;
@@ -418,6 +431,8 @@ void remove_client_ref(int socketfd) {
 	pthread_mutex_destroy(ct->c_lock);
 	free(ct->c_lock);
 	free(ct);
+	
+	clients->count--;
 }
 
 struct client* find_client_ref(int socketfd) {
@@ -453,6 +468,11 @@ int start_server(int port_number, const char* dir_name, int period) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sa.sa_handler = SIG_IGN;
+
+	clients = (struct clientlist*) malloc(sizeof(struct clientlist));
+	clients->head = NULL;
+	clients->tail = NULL;
+	clients->count = 0;
 
     strcpy(init_dir, dir_name);
     gperiod = period;

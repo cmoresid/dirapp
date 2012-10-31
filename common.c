@@ -52,15 +52,9 @@ int read_string(int socketfd, byte* buff, int buff_size) {
 	size_t len;
 	
 	// Read in the size of the string
-	if ( (nbytes = recv(socketfd, buff, 1, 0)) <= 0) {
-		if (nbytes == 0) {
-			return 0;
-		} else {
-			return -1;
-		}
-    } else {
-		len = buff[0];
-    }
+	if ((len = read_byte(socketfd)) <= 0) {
+		return -1; 
+	}
 	
 	// If length of string exceeds the size of the buffer, return
 	// error
@@ -96,12 +90,14 @@ int send_byte(int socketfd, byte b) {
 int send_string(int socketfd, const char* str) {
 	size_t len;
 	len = strlen(str);
-	byte byte_str[len+1];
+	byte byte_str[len];
 	
-	byte_str[0] = len;
-	strncpy(byte_str+1, str, len);
+	if (send_byte(socketfd, len) != 1) {
+		return -1;
+	}
 	
-	if (send(socketfd, byte_str, 1+len, 0) <= 0) {
+	strncpy(byte_str, str, len);
+	if (send(socketfd, byte_str, len, 0) <= 0) {
 		return -1;
 	}
 	
