@@ -60,18 +60,18 @@ struct serverlist {
 	int count;
 };
 
+void list_servers();
 void add_server_ref(const char* host, const char* path, int port, int period, int socketfd);
 void remove_server_ref(int socketfd);
 struct server* find_server_ref(int socketfd);
 struct server* find_server_ref2(const char* host, int port);
 
 int start_client();
-int disconnect_from_server(int socketfd);
+int disconnect_from_server(int socketfd, int pipe);
 static void* signal_thread(void* arg);
 void* handle_input(void* arg);
 
 void* init_server(void* arg);
 void* remove_server(void* arg);
-void* list_servers(void* arg);
 
 #endif // CLIENT_H

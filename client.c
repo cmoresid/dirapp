@@ -151,41 +151,30 @@ int start_client() {
 					// Make sure io_buff is null terminated buffer
 					io_buff[nbytes] = '\0';
 					cmd_buff = (char*) malloc(nbytes*sizeof(char));
-					
 					command = io_buff[0];
+					
 					if (command == ADD_SERVER_C) {
+						io_buff[nbytes] = '\0';
+						cmd_buff = (char*) malloc(nbytes*sizeof(char));
 						strcpy(cmd_buff, io_buff+1);
 						targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
 						targ->buff = cmd_buff;
 						targ->socket_pipe = init_server_pipes[1];
 						pthread_create(&tid, NULL, init_server, (void*)targ);
 					} else if (command == REMOVE_SERVER_C) {
+						io_buff[nbytes] = '\0';
+						cmd_buff = (char*) malloc(nbytes*sizeof(char));
 						strcpy(cmd_buff, io_buff+1);
 						targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
 						targ->buff = cmd_buff;
 						targ->socket_pipe = remove_server_pipes[1];
 						pthread_create(&tid, NULL, remove_server, (void*)targ);
 					} else if (command == LIST_SERVERS_C){
-						// pthread_create(&tid, NULL, list_servers, NULL);
-						if (cmd_buff != NULL)
-							free(cmd_buff);
-						if (targ != NULL)
-							free(targ);
+						// Print out connected servers
+						list_servers(servers);
 					} else {
 						// Quit
-						if (cmd_buff != NULL)
-							free(cmd_buff);
-						if (targ != NULL)
-							free(targ);
-
-						// New function
-						// kill_server_connections()
-						recv_server = servers->head;
-						while (recv_server != NULL) {
-							FD_CLR(recv_server->socket, &master);
-							disconnect_from_server(recv_server->socket);
-							recv_server = recv_server->next;
-						}
+						kill_servers(servers, remove_server_pipes[1]);
 
 						printf("\n\t  Good bye!\n\n");
 						exit(1);
@@ -230,25 +219,7 @@ int start_client() {
 					}
 
 					if (b != 0) {
-						recv_server = find_server_ref(i);
-						
-						printf("\n\t * Updates from %s:%d  --\n", 
-							recv_server->host,
-							recv_server->port);
-						for (j = 0; j < ((int)b); j++) {
-							if (read_string(recv_server->socket, server_buff, 128) <= 0) {
-								fprintf(stderr, "\n\t  Cannot read in entry change.\n");
-								break;
-							} else {
-								if (server_buff[0] == '!') {
-									printf("\t\tModified : %s\n", server_buff+1);
-								} else if (server_buff[0] == '-') {
-									printf("\t\tRemoved  : %s\n", server_buff+1);
-								} else {
-									printf("\t\tAdded    : %s\n", server_buff+1);
-								}
-							}
-						}
+						get_updates(i, (int)b);
 					}
 				}
 			}
@@ -258,6 +229,72 @@ int start_client() {
     return 0;
 }
 
+void get_updates(int socketfd, int numdiffs) {
+	byte server_buff[128];
+	struct server* recv_server;
+	int j;
+	
+	recv_server = find_server_ref(socketfd);
+	
+	// LOCK
+	pthread_mutex_lock(&io_lock);
+	printf("\n\t * Updates from %s:%d  --\n", 
+		recv_server->host,
+		recv_server->port);
+	for (j = 0; j < numdiffs; j++) {
+		if (read_string(socketfd, server_buff, 128) <= 0) {
+			fprintf(stderr, "\n\t  Cannot read in entry change.\n");
+			break;
+		} else {
+			if (server_buff[0] == '!') {
+				printf("\t\tModified : %s\n", server_buff+1);
+			} else if (server_buff[0] == '-') {
+				printf("\t\tRemoved  : %s\n", server_buff+1);
+			} else {
+				printf("\t\tAdded    : %s\n", server_buff+1);
+			}
+		}
+	}
+	// UNLOCK
+	pthread_mutex_unlock(&io_lock);
+}
+
+void kill_servers(struct serverlist* servers, int pipe) {
+	struct server* p;
+	int count;
+	
+	p = servers->head;
+	count = servers->count;
+	
+	if (count != 0) {
+		while (p != NULL) {
+			disconnect_from_server(p->socket, pipe);
+			p = p->next;
+		}
+	} 
+}
+
+void list_servers(struct serverlist* servers) {
+	struct server* tmp;
+	tmp = servers->head;
+	
+	pthread_mutex_lock(&io_lock);
+	
+	if (servers->count > 0) {
+		printf("\n\t  Connected servers:\n");
+	} else {
+		printf("\n\t  No connected servers\n");
+	}
+	
+	while (tmp != NULL) {
+		printf("\t    %s:%d - Directory: %s, Period: %d\n",
+			tmp->host, tmp->port, tmp->path, tmp->period);
+		
+		tmp = tmp->next;
+	}
+	pthread_mutex_unlock(&io_lock);
+}
+
 void* remove_server(void* arg) {
 	struct thread_arg* server_args;
 	struct server* s;
@@ -265,7 +302,6 @@ void* remove_server(void* arg) {
 	char* tmp;
 	int port;
 	int socketfd;
-	int buff[1];
 	int pipe;
 	size_t len;
 	// Get server arguments
@@ -288,14 +324,11 @@ void* remove_server(void* arg) {
 	
 	// Try to find server now to remove
 	if ( (s = find_server_ref2(host, port)) == NULL) {
-		fprintf(stdout, "\n\t  Cannot find connected server.\n");
+		fprintf(stderr, "\n\t  Cannot find connected server.\n");
 		return ((void*)1);
 	} else {
-		// Send socket back to main thread to clear
-		// it from the fdset master
-		buff[0] = s->socket;
-		write(pipe, buff, 1);
-		disconnect_from_server(s->socket);
+		printf("\n\t  Disconnecting from %s:%d\n", s->host, s->port);
+		disconnect_from_server(s->socket, pipe);
 	}
 	
 	return ((void*)0);
@@ -519,6 +552,8 @@ void* handle_input(void* arg) {
 	char buff[128];
 	char results[128];
 	char* token;
+	char c;
+	int i;
 	
 	out_pipe = (int) arg;
 	offset = 2; // Offset of 2
@@ -526,7 +561,7 @@ void* handle_input(void* arg) {
 	while (1) {
 		args = 0;
 		offset = 2;
-		
+
 		printf("  > ");
 		if (fgets(buff, 100, stdin) != NULL) {
 			// Ignore blank line
@@ -640,8 +675,12 @@ static void* signal_thread(void* arg) {
 	return ((void*) 0);
 }
 
-int disconnect_from_server(int socketfd) {
+int disconnect_from_server(int socketfd, int pipe) {
+	int pipe_buff[1];
 	byte buff[8];
+	
+	pipe_buff[0] = socketfd;
+	write(pipe, pipe_buff, 1);
 	
 	// Only send termination to request to server
 	// if client is currently not receiving updates
