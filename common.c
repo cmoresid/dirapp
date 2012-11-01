@@ -88,7 +88,7 @@ int send_byte(int socketfd, byte b) {
 }
 
 int send_string(int socketfd, const char* str) {
-	size_t len;
+	byte len;
 	len = strlen(str);
 	byte byte_str[len];
 	

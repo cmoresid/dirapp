@@ -39,6 +39,9 @@ sigset_t mask;
 pthread_mutex_t servers_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Allow only 1 thread to write to stdin at once */
 pthread_mutex_t io_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Allow only 1 thread to read from network socket at once */
+pthread_mutex_t network_lock = PTHREAD_MUTEX_INITIALIZER;
+/* If trying to remove
 /* Used to keep track of all server connections. */
 struct serverlist* servers;
 
@@ -51,6 +54,7 @@ int start_client() {
 	fd_set read_fds;				/* List of FDs with incoming data */
 	int fdmax;						/* Highest numbered FD */
 	int i;							/* Index of FD */
+	int j;
 	byte command;					/* Current command code of input */
 	int server_socket;				/* Socket FD of server to add */
 	int io_pipes[2];				/* Communication between I/O thread and main thread */
@@ -125,7 +129,7 @@ int start_client() {
         read_fds = master;
 
         if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
-            fprintf(stderr, "select error\n");
+			perror("select");
             exit(1);
         }
 
@@ -156,10 +160,11 @@ int start_client() {
 						targ->socket_pipe = init_server_pipes[1];
 						pthread_create(&tid, NULL, init_server, (void*)targ);
 					} else if (command == REMOVE_SERVER_C) {
-						//strcpy(cmd_buff, io_buff);
-						//targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
-						//targ->buff = cmd_buff;
-						//pthread_create(&tid, NULL, remove_server, (void*)targ);
+						strcpy(cmd_buff, io_buff+1);
+						targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
+						targ->buff = cmd_buff;
+						targ->socket_pipe = remove_server_pipes[1];
+						pthread_create(&tid, NULL, remove_server, (void*)targ);
 					} else if (command == LIST_SERVERS_C){
 						// pthread_create(&tid, NULL, list_servers, NULL);
 						if (cmd_buff != NULL)
@@ -177,6 +182,7 @@ int start_client() {
 						// kill_server_connections()
 						recv_server = servers->head;
 						while (recv_server != NULL) {
+							FD_CLR(recv_server->socket, &master);
 							disconnect_from_server(recv_server->socket);
 							recv_server = recv_server->next;
 						}
@@ -202,22 +208,97 @@ int start_client() {
 	                if (server_socket > fdmax) {
 	                    fdmax = server_socket;
 	                }
-				} else {
-					// Receiving data from a server...
-					// Move to another thread
-					byte b;
-					if ( (b = read_string(i, server_buff, 128)) <= 0) {
-						printf("\n\t  Cannot read string.\n");
+	
+				} else if (i == remove_server_pipes[0]) { 
+					// Get socket fd from remove_server thread
+					if (read(remove_server_pipes[0], io_buff, 1) <= 0) {
+						fprintf(stderr, "\n\t  Cannot read from pipe.\n");
+						exit(1);
 					}
-					recv_server = find_server_ref(i);
-					server_buff[b] = '\0';
-					printf("\n\t  %s:%d - %s\n", recv_server->host, recv_server->port, server_buff);
+					// Save server socket
+					server_socket = (int) io_buff[0];
+					// Remove socket from listening set
+					FD_CLR(server_socket, &master);
+				} else {					
+					byte b;
+					memset(server_buff, 0, sizeof(server_buff));
+					
+					// Receiving data from a server...
+					if ( (b = read_byte(i)) < 0) {
+						printf("\n\t  Cannot read number of entries changed.\n");
+						return ((void*) 0);
+					}
+
+					if (b != 0) {
+						recv_server = find_server_ref(i);
+						
+						printf("\n\t * Updates from %s:%d  --\n", 
+							recv_server->host,
+							recv_server->port);
+						for (j = 0; j < ((int)b); j++) {
+							if (read_string(recv_server->socket, server_buff, 128) <= 0) {
+								fprintf(stderr, "\n\t  Cannot read in entry change.\n");
+								break;
+							} else {
+								if (server_buff[0] == '!') {
+									printf("\t\tModified : %s\n", server_buff+1);
+								} else if (server_buff[0] == '-') {
+									printf("\t\tRemoved  : %s\n", server_buff+1);
+								} else {
+									printf("\t\tAdded    : %s\n", server_buff+1);
+								}
+							}
+						}
+					}
 				}
 			}
 		}
 	}
 
     return 0;
+}
+
+void* remove_server(void* arg) {
+	struct thread_arg* server_args;
+	struct server* s;
+	char* host;
+	char* tmp;
+	int port;
+	int socketfd;
+	int buff[1];
+	int pipe;
+	size_t len;
+	// Get server arguments
+	server_args = (struct thread_arg*) arg;
+	// Store host token
+	tmp = strtok(server_args->buff, " ");
+	len = strlen(tmp);
+	// Copy hostname from temp to host
+	host = (char*) malloc(len*sizeof(char));
+	strcpy(host, tmp);
+	// Last token should be the port
+	port = atoi(strtok(NULL, " "));
+	// Get pipe
+	pipe = server_args->socket_pipe;
+	// Free temporary structures
+	free(server_args->buff);
+	free(server_args);
+	server_args = NULL;
+	tmp = NULL;
+	
+	// Try to find server now to remove
+	if ( (s = find_server_ref2(host, port)) == NULL) {
+		fprintf(stdout, "\n\t  Cannot find connected server.\n");
+		return ((void*)1);
+	} else {
+		// Send socket back to main thread to clear
+		// it from the fdset master
+		buff[0] = s->socket;
+		write(pipe, buff, 1);
+		disconnect_from_server(s->socket);
+	}
+	
+	return ((void*)0);
 }
 
 void* init_server(void* arg) {
@@ -307,6 +388,8 @@ void* init_server(void* arg) {
 	// about it
 	results[0] = socketfd;
 	write(pipe, results, 1);
+	
+	printf("\n\t  Directory: %s, Period: %d\n", path, period);
 
 	return ((void*)0);
 }
@@ -373,6 +456,7 @@ void remove_server_ref(int socketfd) {
 		servers->tail = servers->head;
 	} else if (s == servers->head) {
 		servers->head = servers->head->next;
+		servers->head->prev = NULL;
 	} else if (s == servers->tail) {
 		servers->tail = servers->tail->prev;
 		servers->tail->next = NULL;
@@ -413,6 +497,21 @@ struct server* find_server_ref(int socketfd) {
 	return NULL;
 }
 
+struct server* find_server_ref2(const char* host, int port) {
+	struct server* p;
+	p = servers->head;
+	
+	while (p != NULL) {
+		if ( (strcmp(p->host, host) == 0) && (p->port == port) ) {
+			return p;
+		}
+		
+		p = p->next;
+	}
+	
+	return NULL;
+}
+
 void* handle_input(void* arg) {
 	int out_pipe, args, offset;
 	size_t len, token_len;
@@ -427,8 +526,8 @@ void* handle_input(void* arg) {
 	while (1) {
 		args = 0;
 		offset = 2;
-		printf("  > ");
 		
+		printf("  > ");
 		if (fgets(buff, 100, stdin) != NULL) {
 			// Ignore blank line
 			len = strlen(buff);
@@ -480,7 +579,13 @@ void* handle_input(void* arg) {
 				}
 				
 				results[0] = (char) (offset - args + 1);
-				results[1] = ADD_SERVER_C;
+				
+				if (command == REMOVE_SERVER_C) {
+					results[1] = REMOVE_SERVER_C;
+				} else {
+					results[1] = ADD_SERVER_C;
+				}
+
 				results[offset-args+2] = '\0';
 			} else if (command == LIST_SERVERS_C) {
 				token = strtok(NULL, " \n");
@@ -527,7 +632,7 @@ static void* signal_thread(void* arg) {
             default:
                 // Finish transfers, quit
                 fprintf(stderr, "Unexpected signal: %d", signo);
-                exit(1);
+                //exit(1);
                 break;
         }
     }
@@ -557,14 +662,14 @@ int disconnect_from_server(int socketfd) {
 		return -1;
 	}
 	
-	if (read_byte(socketfd) != 0xFF) {
-		fprintf(stderr, "Non-orderly shutdown.\n");
+	if (read_byte(socketfd) != END_COM) {
+		fprintf(stderr, "Non-orderly shutdown 1.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
 	
 	if (read_string(socketfd, buff, 8) != 7) {
-		fprintf(stderr, "Non-orderly shutdown.\n");
+		fprintf(stderr, "Non-orderly shutdown 2.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
@@ -575,7 +680,7 @@ int disconnect_from_server(int socketfd) {
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
-	
+
 	close(socketfd);
 	
 	return 0;

@@ -37,6 +37,8 @@
 
 /* Ensures mutual exclusion for clients linked list */
 pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Ensure update_buff is only accessed one at a time */
+pthread_mutex_t updatebuff_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Shared mask for all threads */
 sigset_t mask;
 /* The name/path of the directory, as passed in the commandline argument */
@@ -210,8 +212,7 @@ int difference_direntrylist() {
 	size_t len;
 	int* checked;
 	
-	syslog(LOG_INFO, "Inside differency_direntrylist");
-	
+	memset(update_buff, 0, sizeof(update_buff));
 	curdir = exploredir((const char*) full_path); /* Global variable: full_path */
 	checked = (int*) malloc((curdir->count+prevdir->count)*sizeof(int));  /* Global variable: prevdir */
 	
@@ -225,98 +226,115 @@ int difference_direntrylist() {
 	// WHEN YOUR NOT SO TIRED, MAKE SURE YOU DO A PROPER BOUNDS
 	// CHECK ON COPYING INTO THE BUFF buffer.
 	
+	pthread_mutex_lock(&updatebuff_lock);
+	
 	entry_prev = prevdir->head;
 	while (entry_prev != NULL) {
 		if ( (entry_cur = find_direntry(curdir, entry_prev)) != NULL 
 				&& find_checked(checked, i, entry_prev) == 0) {
-			// UID
-			if (entry_prev->attrs->st_uid != entry_cur->attrs->st_uid) {
+			// Permissions
+			if (entry_prev->attrs->st_mode != entry_cur->attrs->st_mode) {
 				memset(buff, 0, sizeof(buff));
 				len = strlen(entry_prev->filename);
-				strcat(buff+1, "! ");
-				strcat(buff+3, entry_prev->filename);
-				strcat(buff+3+len, " UID has changed");
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> permissions.");
 				len = strlen(buff+1);
-				buff[0] = len;
 				
 				strcpy(update_buff+i_buff, buff);
 				
 				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
+				ndiffs++;
+			}
+			// UID
+			if (entry_prev->attrs->st_uid != entry_cur->attrs->st_uid) {
+				memset(buff, 0, sizeof(buff));
+				len = strlen(entry_prev->filename);
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> UID owner.");
+				len = strlen(buff+1);
+				
+				strcpy(update_buff+i_buff, buff);
+				
+				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
 				ndiffs++;
 			}
 			// GID
 			if (entry_prev->attrs->st_gid != entry_cur->attrs->st_gid) {
 				memset(buff, 0, sizeof(buff));
 				len = strlen(entry_prev->filename);
-				strcat(buff+1, "! ");
-				strcat(buff+3, entry_prev->filename);
-				strcat(buff+3+len, " GID has changed");
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> GID owner.");
 				len = strlen(buff+1);
-				buff[0] = len;
 				
 				strcpy(update_buff+i_buff, buff);
 				
 				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
 				ndiffs++;
 			}
 			// Size
 			if (entry_prev->attrs->st_size != entry_cur->attrs->st_size) {
 				memset(buff, 0, sizeof(buff));
 				len = strlen(entry_prev->filename);
-				strcat(buff+1, "! ");
-				strcat(buff+3, entry_prev->filename);
-				strcat(buff+3+len, " Size has changed");
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> size.");
 				len = strlen(buff+1);
-				buff[0] = len;
 				
 				strcpy(update_buff+i_buff, buff);
 				
 				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
 				ndiffs++;
 			}
 			// Access time
 			if (entry_prev->attrs->st_atime != entry_cur->attrs->st_atime) {
 				memset(buff, 0, sizeof(buff));
 				len = strlen(entry_prev->filename);
-				strcat(buff+1, "! ");
-				strcat(buff+3, entry_prev->filename);
-				strcat(buff+3+len, " Last access time has changed");
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> last access time.");
 				len = strlen(buff+1);
-				buff[0] = len;
 				
 				strcpy(update_buff+i_buff, buff);
 				
 				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
 				ndiffs++;
 			}
 			// Modified time
 			if (entry_prev->attrs->st_mtime != entry_cur->attrs->st_mtime) {
 				memset(buff, 0, sizeof(buff));
 				len = strlen(entry_prev->filename);
-				strcat(buff+1, "! ");
-				strcat(buff+3, entry_prev->filename);
-				strcat(buff+3+len, " Last modification time has changed");
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> last modification time");
 				len = strlen(buff+1);
-				buff[0] = len;
 				
 				strcpy(update_buff+i_buff, buff);
 				
 				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
 				ndiffs++;
 			}
 			// File status time
 			if (entry_prev->attrs->st_ctime != entry_cur->attrs->st_ctime) {
 				memset(buff, 0, sizeof(buff));
 				len = strlen(entry_prev->filename);
-				strcat(buff+1, "! ");
-				strcat(buff+3, entry_prev->filename);
-				strcat(buff+3+len, " Last file status time has changed");
+				strcat(buff, "! ");
+				strcat(buff+2, entry_prev->filename);
+				strcat(buff+2+len, " -> last file status time");
 				len = strlen(buff+1);
-				buff[0] = len;
 				
 				strcpy(update_buff+i_buff, buff);
 				
 				i_buff += len+1;
+				update_buff[i_buff++] = '\0';
 				ndiffs++;
 			}
 			
@@ -325,15 +343,14 @@ int difference_direntrylist() {
 		} else {
 			memset(buff, 0, sizeof(buff));
 			len = strlen(entry_prev->filename);
-			strcat(buff+1, "- ");
-			strcat(buff+3, entry_prev->filename);
-			strcat(buff+3+len, " Removed");
+			strcat(buff, "- ");
+			strcat(buff+2, entry_prev->filename);
 			len = strlen(buff+1);
-			buff[0] = len;
 			
 			strcpy(update_buff+i_buff, buff);
 			
 			i_buff += len+1;
+			update_buff[i_buff++] = '\0';
 			ndiffs++;
 		}
 		
@@ -345,15 +362,14 @@ int difference_direntrylist() {
 		if (find_checked(checked, i, entry_cur) == 0) {
 			memset(buff, 0, sizeof(buff));
 			len = strlen(entry_cur->filename);
-			strcat(buff+1, "+ ");
-			strcat(buff+3, entry_cur->filename);
-			strcat(buff+3+len, " Added");
+			strcat(buff, "+ ");
+			strcat(buff+2, entry_cur->filename);
 			len = strlen(buff+1);
-			buff[0] = len;
 			
 			strcpy(update_buff+i_buff, buff);
 			
 			i_buff += len+1;
+			update_buff[i_buff++] = '\0';
 			ndiffs++;
 		}
 		
@@ -361,6 +377,8 @@ int difference_direntrylist() {
 	}
 	
 	update_buff[0] = ndiffs;
+	
+	pthread_mutex_unlock(&updatebuff_lock);
 	
 	free_direntrylist(prevdir);
 	prevdir = curdir;
@@ -456,29 +474,42 @@ static void* signal_thread(void* arg) {
 void* send_updates(void* arg) {
 	struct client* p;
 	int diffs;
+	int i;
+	int i_update;
+	byte len;
 	
 	p = clients->head;
 	diffs = difference_direntrylist();
 	
-	//syslog(LOG_INFO, "Number of updates: %d", diffs);
-	
 	// LOCK
 	pthread_mutex_lock(&clients_lock);
 	
-	if (1) { // There are differences
-		while (p != NULL) {
-			// LOCK
-			pthread_mutex_lock(p->c_lock);
+	while (p != NULL) {
+		// LOCK
+		pthread_mutex_lock(p->c_lock);
+		pthread_mutex_lock(&updatebuff_lock);
 			
-			if (send_string(p->socket, "Update") != 6) {
-				syslog(LOG_ERR, "Could not send update");
-				exit(1);
-			}
-			// UNLOCK
-			pthread_mutex_unlock(p->c_lock);
-			
-			p = p->next;
+		if (send_byte(p->socket, update_buff[0]) <= 0) {
+			syslog(LOG_ERR, "Could not send number of changed entries");
 		}
+			
+		if ((int)update_buff[0] != '0') {
+			i_update = 1;
+			for (i = 0; i < diffs; i++) {
+				len = strlen(update_buff+i_update);
+				
+				if (send_string(p->socket, update_buff+i_update) <= 0) {
+					syslog(LOG_ERR, "Cound not send string");
+				}
+				
+				i_update += (int) (len + 1);
+			}
+		}
+		
+		// UNLOCK
+		pthread_mutex_unlock(&updatebuff_lock);
+		pthread_mutex_unlock(p->c_lock);
+		p = p->next;
 	}
 	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
