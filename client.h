@@ -60,6 +60,8 @@ struct serverlist {
 	int count;
 };
 
+void get_updates();
+void kill_servers(struct serverlist* servers, int pipe);
 void list_servers();
 void add_server_ref(const char* host, const char* path, int port, int period, int socketfd);
 void remove_server_ref(int socketfd);

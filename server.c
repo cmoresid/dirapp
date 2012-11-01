@@ -654,6 +654,7 @@ void remove_client_ref(int socketfd) {
 		clients->tail = clients->head;
 	} else if (ct == clients->head) {
 		clients->head = clients->head->next;
+		clients->head->prev = NULL;
 	} else if (ct == clients->tail) {
 		clients->tail = clients->tail->prev;
 		clients->tail->next = NULL;

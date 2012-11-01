@@ -41,20 +41,19 @@ pthread_mutex_t servers_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t io_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Allow only 1 thread to read from network socket at once */
 pthread_mutex_t network_lock = PTHREAD_MUTEX_INITIALIZER;
-/* If trying to remove
+/* Only allow 1 thread to alter the io_buffer */
+pthread_mutex_t iobuff_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Used to keep track of all server connections. */
 struct serverlist* servers;
 
 int start_client() {	
 	pthread_t tid;					/* Pass to pthread_create */
 	struct thread_arg* targ;		/* Allows passing of multiple arguments to thread */
-	struct server* recv_server;		/* Reference to server currently sending data */
 	
 	fd_set master;					/* Master list of FDs */
 	fd_set read_fds;				/* List of FDs with incoming data */
 	int fdmax;						/* Highest numbered FD */
 	int i;							/* Index of FD */
-	int j;
 	byte command;					/* Current command code of input */
 	int server_socket;				/* Socket FD of server to add */
 	int io_pipes[2];				/* Communication between I/O thread and main thread */
@@ -64,7 +63,6 @@ int start_client() {
 	int nbytes;						/* Number of bytes read in */
 	char io_buff[128];				/* Filled from I/O thread */
 	char* cmd_buff;					/* Filled from I/O thread to contain command args */
-	byte server_buff[128];			/* Filled from incoming server data */
 	
 	servers = (struct serverlist*) malloc(sizeof(struct serverlist));
 	servers->head = NULL;
@@ -78,10 +76,13 @@ int start_client() {
 	if (sigaction(SIGPIPE, &sa, NULL) < 0) {
         printf("SIGPIPE error\n"); 
     }
-        
+     
+  	// Signals to block on all threads, except
+	// the signal thread
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
     sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGINT);
 
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
         printf("pthread_sigmask failed\n");
@@ -114,7 +115,7 @@ int start_client() {
 	// Spawn I/O thread
 	pthread_create(&tid, NULL, handle_input, (void*)io_pipes[1]);
 	// Spawn signal thread
-	pthread_create(&tid, NULL, signal_thread, NULL);
+	pthread_create(&tid, NULL, signal_thread, (void*)remove_server_pipes[1]);
 	
 	// Main loop	
 	FD_SET(io_pipes[0], &master);
@@ -136,55 +137,63 @@ int start_client() {
 		for (i = 0; i <= fdmax; i++) {
             if (FD_ISSET(i, &read_fds)) {
 				if (i == io_pipes[0]) {
-					// Handle I/O
+					// LOCK io_buff
+					pthread_mutex_lock(&iobuff_lock);
+					// Get number of bytes of the command + arguments
 					if (read(io_pipes[0], io_buff, 1) <= 0) {
 						fprintf(stderr, "\n\t  Cannot read from pipe.\n");
 						exit(1);
-					}
-					
+					}	
+					// How many bytes to read out of io_buff,
+					// which has the command and the arguments
+					// for that command
 					nbytes = (int)io_buff[0];
 					if (read(io_pipes[0], io_buff, nbytes) <= 0) {
 						fprintf(stderr, "\n\t  Cannot read from pipe.\n");
 						exit(1);
 					}
 					
-					// Make sure io_buff is null terminated buffer
-					io_buff[nbytes] = '\0';
-					cmd_buff = (char*) malloc(nbytes*sizeof(char));
+					// Get command code from io_buffer
 					command = io_buff[0];
-					
-					if (command == ADD_SERVER_C) {
-						io_buff[nbytes] = '\0';
+					// Add server or remove server
+					if (command == ADD_SERVER_C || command == REMOVE_SERVER_C) {
+						// cmd_buff is passed to either init_server or remove_server
+						// in order to have access to the arguments
 						cmd_buff = (char*) malloc(nbytes*sizeof(char));
+						// NULL terminate the arguments
+						io_buff[nbytes] = '\0';
 						strcpy(cmd_buff, io_buff+1);
 						targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
 						targ->buff = cmd_buff;
-						targ->socket_pipe = init_server_pipes[1];
-						pthread_create(&tid, NULL, init_server, (void*)targ);
-					} else if (command == REMOVE_SERVER_C) {
-						io_buff[nbytes] = '\0';
-						cmd_buff = (char*) malloc(nbytes*sizeof(char));
-						strcpy(cmd_buff, io_buff+1);
-						targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
-						targ->buff = cmd_buff;
-						targ->socket_pipe = remove_server_pipes[1];
-						pthread_create(&tid, NULL, remove_server, (void*)targ);
+						
+						if (command == ADD_SERVER_C) {
+							// Pipe is used to retrieve the newly created socket
+							// from server
+							targ->socket_pipe = init_server_pipes[1];
+							pthread_create(&tid, NULL, init_server, (void*)targ);
+						} else {
+							// Pipe is used to retrieve the socket of the server
+							// to destroy
+							targ->socket_pipe = remove_server_pipes[1];
+							pthread_create(&tid, NULL, remove_server, (void*)targ);
+						}
 					} else if (command == LIST_SERVERS_C){
 						// Print out connected servers
 						list_servers(servers);
 					} else {
-						// Quit
+						// Nicely KILL ALL SERVERS!!
 						kill_servers(servers, remove_server_pipes[1]);
-
 						printf("\n\t  Good bye!\n\n");
 						exit(1);
 					}
-
-					// Make sure to de-allocate memory in thread
-					// Potential memory leak here.
+					// UNLOCK io_buff
+					pthread_mutex_unlock(&iobuff_lock);
+					// Make sure to de-allocate memory in thread.
 					cmd_buff = NULL;
 					targ = NULL;
 				} else if (i == init_server_pipes[0]) {
+					// LOCK io_buff
+					pthread_mutex_lock(&iobuff_lock);
 					// Get socket fd from init_server thread
 					if (read(init_server_pipes[0], io_buff, 1) <= 0) {
 						fprintf(stderr, "\n\t  Cannot read from pipe.\n");
@@ -197,27 +206,31 @@ int start_client() {
 	                if (server_socket > fdmax) {
 	                    fdmax = server_socket;
 	                }
-	
+					// UNLOCK io_buff
+					pthread_mutex_unlock(&iobuff_lock);
 				} else if (i == remove_server_pipes[0]) { 
+					// LOCK io_buff
+					pthread_mutex_lock(&iobuff_lock);
 					// Get socket fd from remove_server thread
 					if (read(remove_server_pipes[0], io_buff, 1) <= 0) {
 						fprintf(stderr, "\n\t  Cannot read from pipe.\n");
 						exit(1);
 					}
+					// UNLOCK io_buff
+					pthread_mutex_unlock(&iobuff_lock);
 					// Save server socket
 					server_socket = (int) io_buff[0];
 					// Remove socket from listening set
 					FD_CLR(server_socket, &master);
 				} else {					
 					byte b;
-					memset(server_buff, 0, sizeof(server_buff));
 					
 					// Receiving data from a server...
 					if ( (b = read_byte(i)) < 0) {
 						printf("\n\t  Cannot read number of entries changed.\n");
 						return ((void*) 0);
 					}
-
+					// Retrieve all updates from a server
 					if (b != 0) {
 						get_updates(i, (int)b);
 					}
@@ -238,6 +251,7 @@ void get_updates(int socketfd, int numdiffs) {
 	
 	// LOCK
 	pthread_mutex_lock(&io_lock);
+	pthread_mutex_lock(recv_server->s_lock);
 	printf("\n\t * Updates from %s:%d  --\n", 
 		recv_server->host,
 		recv_server->port);
@@ -256,22 +270,31 @@ void get_updates(int socketfd, int numdiffs) {
 		}
 	}
 	// UNLOCK
+	pthread_mutex_unlock(recv_server->s_lock);
 	pthread_mutex_unlock(&io_lock);
 }
 
 void kill_servers(struct serverlist* servers, int pipe) {
 	struct server* p;
 	int count;
+	int socket;
 	
 	p = servers->head;
 	count = servers->count;
 	
+	pthread_mutex_lock(&servers_lock);
 	if (count != 0) {
 		while (p != NULL) {
-			disconnect_from_server(p->socket, pipe);
-			p = p->next;
+			// Only send termination to request to server
+			// if client is currently not receiving updates
+			// from server
+			socket = p->socket;
+			remove_server_ref(p->socket);
+			disconnect_from_server(socket, pipe);
+			p = servers->head;
 		}
-	} 
+	}
+	pthread_mutex_unlock(&servers_lock);
 }
 
 void list_servers(struct serverlist* servers) {
@@ -301,7 +324,6 @@ void* remove_server(void* arg) {
 	char* host;
 	char* tmp;
 	int port;
-	int socketfd;
 	int pipe;
 	size_t len;
 	// Get server arguments
@@ -327,6 +349,14 @@ void* remove_server(void* arg) {
 		fprintf(stderr, "\n\t  Cannot find connected server.\n");
 		return ((void*)1);
 	} else {
+		// Only send termination to request to server
+		// if client is currently not receiving updates
+		// from server
+		pthread_mutex_lock(&servers_lock);
+		remove_server_ref(s->socket);
+		pthread_mutex_unlock(&servers_lock);
+		
+		// UNLOCK
 		printf("\n\t  Disconnecting from %s:%d\n", s->host, s->port);
 		disconnect_from_server(s->socket, pipe);
 	}
@@ -472,9 +502,6 @@ void remove_server_ref(int socketfd) {
 	struct server* s;
 	struct server* tmp;
 	
-	// LOCK
-	pthread_mutex_lock(&servers_lock);
-	
 	if ( (s = find_server_ref(socketfd)) == NULL ) {
 		fprintf(stderr, "\n\t  Cannot find server.\n");
 		return;
@@ -500,8 +527,7 @@ void remove_server_ref(int socketfd) {
 	}
 
 	// UNLOCK
-	pthread_mutex_unlock(s->s_lock);
-	pthread_mutex_unlock(&servers_lock);	
+	pthread_mutex_unlock(s->s_lock);	
 	
 	// Deallocate client now
 	s->prev = NULL;
@@ -552,8 +578,6 @@ void* handle_input(void* arg) {
 	char buff[128];
 	char results[128];
 	char* token;
-	char c;
-	int i;
 	
 	out_pipe = (int) arg;
 	offset = 2; // Offset of 2
@@ -646,7 +670,11 @@ void* handle_input(void* arg) {
 }
 
 static void* signal_thread(void* arg) {
-    int err, signo;
+	int err;
+	int signo;
+	int pipe;
+	
+	pipe = (int) arg;
 
     for (;;) {
         err = sigwait(&mask, &signo);
@@ -658,15 +686,23 @@ static void* signal_thread(void* arg) {
         switch (signo) {
             case SIGHUP:
                 // Finish transfers, remove all clients
-                printf("Received SIGHUP\n");
+                printf("Purging all server connections.\n");
+				kill_servers(servers, pipe);
                 break;
             case SIGTERM:
                 // Same as SIGHUP, then quit
-				printf("Received SIGTERM\n");
+				printf("\n\t  ** Purging all server connections and quiting.\n\n");
+				kill_servers(servers, pipe);
+				exit(0);
                 break;
+			case SIGINT:
+				printf("\n\t  ** Purging all server connections and quitting.\n\n");
+				kill_servers(servers, pipe);
+				exit(0);
+				break;
             default:
                 // Finish transfers, quit
-                fprintf(stderr, "Unexpected signal: %d", signo);
+                fprintf(stderr, "\n\t  Unexpected signal: %d", signo);
                 //exit(1);
                 break;
         }
@@ -681,13 +717,6 @@ int disconnect_from_server(int socketfd, int pipe) {
 	
 	pipe_buff[0] = socketfd;
 	write(pipe, pipe_buff, 1);
-	
-	// Only send termination to request to server
-	// if client is currently not receiving updates
-	// from server
-	// LOCK
-	remove_server_ref(socketfd);
-	// UNLOCK
 	
 	if (send_byte(socketfd, REQ_REMOVE1) != 1) {
 		fprintf(stderr, "Could not send byte.\n");
