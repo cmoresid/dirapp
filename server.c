@@ -35,6 +35,8 @@
 #include "server.h"
 #include "common.h"
 
+//#define DAEMONIZE
+
 /* Ensures mutual exclusion for clients linked list */
 pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Ensure update_buff is only accessed one at a time */
@@ -83,6 +85,7 @@ int free_direntrylist(struct direntrylist* list) {
 		free(p->attrs);
 		// Hold on to next reference
 		tmp = p->next;
+		p->next = NULL;
 		free(p);
 		p = tmp;
 	}
@@ -218,16 +221,13 @@ int append_diff(int* i_buff, const char* mode, const char* filename, const char*
 	return 0;
 }
 
-// Returns how many differences
 int difference_direntrylist() {
 	int ndiffs;
-	byte buff[128];
 	struct direntrylist* curdir;
 	struct direntry* entry_prev;
 	struct direntry* entry_cur;
 	int i;
 	int i_buff;
-	size_t len;
 	int* checked;
 	
 	memset(update_buff, 0, sizeof(update_buff));
@@ -330,13 +330,9 @@ int find_checked(const int* checked, int size, int addr) {
 
 void create_daemon(const char* name) {
 	pid_t pid;
-	struct rlimit rl;
 	struct sigaction sa;
 
 	umask(0);
-
-    if (getrlimit(RLIMIT_NOFILE, &rl) < 0)
-        err_quit("Can't get file limit");
 
     if ((pid = fork()) < 0) {
         err_quit("Can't fork.");
@@ -356,6 +352,9 @@ void create_daemon(const char* name) {
 
     if (chdir("/") < 0)
         err_quit("Can't switch to root directory.");
+
+	pid = getpid();
+	printf("Process ID: %d\n", pid);
 
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
