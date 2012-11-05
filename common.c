@@ -35,13 +35,7 @@ byte read_byte(int socketfd) {
 	
 	// Read in one byte
 	if ( (nbytes = recv(socketfd, buff, 1, 0)) <= 0) {
-		// Nothing received
-        if (nbytes == 0) {
-			return 0;
-        } else {
-			// Error has occurred
-			return -1;
-        }
+		return 0;
     } else {
 		return buff[0];
     }

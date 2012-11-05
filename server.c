@@ -112,16 +112,6 @@ int add_direntry(struct direntrylist* list, struct direntry* entry) {
     return 1;
 }
 
-// Debugging purposes
-void print_direntrylist(struct direntrylist* list) {
-    struct direntry* p = list->head;
-
-    while (p != NULL) {
-        syslog(LOG_DEBUG,"%s : ino %i\n", p->filename, p->attrs->st_ino);
-        p = p->next;
-    }
-}
-
 struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry) {
     if ( (list == NULL) || (list->head == NULL) )
         return NULL;
@@ -208,6 +198,26 @@ struct direntrylist* exploredir(const char* path) {
     return list;
 }
 
+int append_diff(int* i_buff, const char* mode, const char* filename, const char* desc) {
+	size_t len;
+	byte buff[128];
+	memset(buff, 0, sizeof(buff));
+	
+	len = strlen(filename);
+	strcat(buff, mode);
+	strcat(buff+1, " ");
+	strcat(buff+2, filename);
+	strcat(buff+2+len, desc);
+	len = strlen(buff+1);
+	
+	strcpy(update_buff+(*i_buff), buff);
+	
+	(*i_buff) += len+1;
+	update_buff[(*i_buff)++] = '\0';
+	
+	return 0;
+}
+
 // Returns how many differences
 int difference_direntrylist() {
 	int ndiffs;
@@ -242,123 +252,44 @@ int difference_direntrylist() {
 				&& find_checked(checked, i, entry_prev) == 0) {
 			// Permissions
 			if (entry_prev->attrs->st_mode != entry_cur->attrs->st_mode) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> permissions.");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> permissions.");
 				ndiffs++;
 			}
 			// UID
 			if (entry_prev->attrs->st_uid != entry_cur->attrs->st_uid) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> UID owner.");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> UID owner.");
 				ndiffs++;
 			}
 			// GID
 			if (entry_prev->attrs->st_gid != entry_cur->attrs->st_gid) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> GID owner.");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> GID owner.");
 				ndiffs++;
 			}
 			// Size
 			if (entry_prev->attrs->st_size != entry_cur->attrs->st_size) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> size.");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> size.");
 				ndiffs++;
 			}
 			// Access time
 			if (entry_prev->attrs->st_atime != entry_cur->attrs->st_atime) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> last access time.");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> last access time.");
 				ndiffs++;
 			}
 			// Modified time
 			if (entry_prev->attrs->st_mtime != entry_cur->attrs->st_mtime) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> last modification time");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> last modification time.");
 				ndiffs++;
 			}
 			// File status time
 			if (entry_prev->attrs->st_ctime != entry_cur->attrs->st_ctime) {
-				memset(buff, 0, sizeof(buff));
-				len = strlen(entry_prev->filename);
-				strcat(buff, "! ");
-				strcat(buff+2, entry_prev->filename);
-				strcat(buff+2+len, " -> last file status time");
-				len = strlen(buff+1);
-				
-				strcpy(update_buff+i_buff, buff);
-				
-				i_buff += len+1;
-				update_buff[i_buff++] = '\0';
+				append_diff(&i_buff, "!", entry_prev->filename, " -> last file status time.");
 				ndiffs++;
 			}
 			
 			checked[i++] = entry_prev;
 			checked[i++] = entry_cur;
 		} else {
-			memset(buff, 0, sizeof(buff));
-			len = strlen(entry_prev->filename);
-			strcat(buff, "- ");
-			strcat(buff+2, entry_prev->filename);
-			len = strlen(buff+1);
-			
-			strcpy(update_buff+i_buff, buff);
-			
-			i_buff += len+1;
-			update_buff[i_buff++] = '\0';
+			append_diff(&i_buff, "-", entry_prev->filename, " ");
 			ndiffs++;
 		}
 		
@@ -368,16 +299,7 @@ int difference_direntrylist() {
 	entry_cur = curdir->head;
 	while (entry_cur != NULL) {
 		if (find_checked(checked, i, entry_cur) == 0) {
-			memset(buff, 0, sizeof(buff));
-			len = strlen(entry_cur->filename);
-			strcat(buff, "+ ");
-			strcat(buff+2, entry_cur->filename);
-			len = strlen(buff+1);
-			
-			strcpy(update_buff+i_buff, buff);
-			
-			i_buff += len+1;
-			update_buff[i_buff++] = '\0';
+			append_diff(&i_buff, "+", entry_cur->filename, " ");
 			ndiffs++;
 		}
 		

@@ -226,13 +226,10 @@ int start_client() {
 					byte b;
 					// Receiving data from a server...
 					b = read_byte(i);
-					if (b < 0) {
-						printf("\n\t  Cannot read number of entries changed.\n");
-						return ((void*) 0);
-					} else if (b > 0 && b < 255) {
+					if (b > 0 && b < 255) {
 						// Retrieve all updates from a server
 						get_updates(i, (int)b);
-					} else if (b == END_COM){
+					} else if (b == END_COM) {
 						// Error message has been sent from server
 						byte server_buff[128];
 						struct server* err_serv;
