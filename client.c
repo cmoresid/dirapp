@@ -407,6 +407,7 @@ void* init_server(void* arg) {
 	struct sockaddr_in server_info;
 	byte buff[256];
 	byte* path;
+	byte b;
 	size_t len;
 	int results[1];
 	
@@ -453,8 +454,19 @@ void* init_server(void* arg) {
 		pthread_exit((void*) 1);
     }
 	// Read acknowledgement from server 1
-	if (read_byte(socketfd) != INIT_CLIENT1 ) {
+	b = read_byte(socketfd);
+	
+	// Error from server
+	if (b == END_COM) {
+		read_string(socketfd, buff, 256);
+		printf("\n\t  ** %s\n", buff);
+		close(socketfd);
+		pthread_exit((void*) 1);
+	}
+	// Make sure b is INIT_CLIENT1
+	if (b != INIT_CLIENT1)  {
 		fprintf(stderr, "Unexpected response. Abort!\n");
+		close(socketfd);
 		pthread_exit((void*) 1);
 	}
 	// Read acknowledgement from server 1

@@ -53,6 +53,8 @@ struct direntrylist* prevdir;
 int gperiod;
 /* The update buffer */
 byte update_buff[1024];
+/* Pipe used to send sockets to remove from the master list in the main thread */
+int remove_client_pipes[2];
 
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
@@ -147,12 +149,14 @@ struct direntrylist* exploredir(const char* path) {
     char abspath[PATH_MAX];
     
     if ( (dir = opendir(path)) == NULL ) {
-        // Exit nicely, but for no EXIT NOW!!
+        // Send error message to all clients and then exit
+		kill_clients(remove_client_pipes[1], "Cannot open directory! ; Exiting now!");
         syslog(LOG_ERR, "Cannot open directory: %s", path);
         exit(1);
     }
 
     if ( (list = init_direntrylist()) == NULL ) {
+		kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
         syslog(LOG_ERR, "Cannot malloc new direntrylist");
         exit(1);
     }
@@ -167,11 +171,13 @@ struct direntrylist* exploredir(const char* path) {
         memset(list_entry, 0, sizeof(list_entry));
 
         if (fattr == NULL || list_entry == NULL) {
+			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Cannot malloc direntry");
             exit(1);
         }
 
         if ((strlen(path) + strlen(entry->d_name) + 1) >= PATH_MAX) {
+			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Path is too long.");
             exit(1);
         } else {
@@ -181,6 +187,7 @@ struct direntrylist* exploredir(const char* path) {
         }
 
         if (stat(abspath, fattr) < 0) {
+			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Cannot get stats on file: %s", entry->d_name);
             exit(1);
         }
@@ -193,6 +200,7 @@ struct direntrylist* exploredir(const char* path) {
     }
 
     if (closedir(dir) < 0) {
+		kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
         syslog(LOG_ERR, "Cannot close directory.");
         exit(1);
     }
@@ -550,10 +558,25 @@ int send_error(int socket, const char* err_msg) {
 	return 0;
 }
 
+int send_error2(int socket, const char* err_msg) {
+	if (send_byte(socket, END_COM) <= 0) {
+		syslog(LOG_ERR, "Could not send error byte");
+		return -1;
+	}
+	
+	if (send_string(socket, err_msg) <= 0) {
+		syslog(LOG_ERR, "Could not send error string");
+		return -1;
+	}
+	
+	return 0;
+}
+
 void* init_client(void* arg) {
     pthread_t tid;
     int socketfd;
     size_t len;
+	int socket_buff[1];
 
     tid = pthread_self();
     socketfd = (int) arg;
@@ -561,9 +584,14 @@ void* init_client(void* arg) {
 
 	if (clients->count == MAX_CLIENTS) {
 		syslog(LOG_INFO, "No more clients can be accepted.");
-		//send_error("No more clients can be accepted");
-		//close(socketfd);
-		//pthread_exit((void*)1);
+		// Tell main thread to remove socket from master list
+		socket_buff[0] = socketfd;
+		write(remove_client_pipes[1], socket_buff, 1);
+		// Send the error now
+		send_error2(socketfd, "No more clients can be accepted.");
+
+		close(socketfd);
+		pthread_exit((void*)1);
 	}
 
     add_client_ref(socketfd);
@@ -588,7 +616,7 @@ void* init_client(void* arg) {
 		exit(1);
 	}
 
-    syslog(LOG_INFO, "Spawned new thread to handle client!");
+    syslog(LOG_DEBUG, "Spawned new thread to handle client!");
 	return ((void*) 0);
 }
 
@@ -789,7 +817,6 @@ int start_server(int port_number, const char* dir_name, int period) {
     struct sockaddr_in local_addr;
     struct sockaddr_in remote_addr;
     socklen_t addr_len;
-	int remove_client_pipes[2];
 	int socket_buff[5];
 
     struct sigaction sa;
