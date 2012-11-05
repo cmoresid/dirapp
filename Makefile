@@ -2,7 +2,7 @@ CC		 = gcc
 SOURCES  = common.c client.c server.c dirapp.c 
 OBJECTS  = $(SOURCES:.c=.o)
 TARGET   = dirapp 
-CFLAGS   = -g -c -Wall
+CFLAGS   = -g -c -Wall -Wno-sign-compare -Wno-pointer-sign
 LDFLAGS	 = -lpthread
 
 all: $(SOURCES) $(TARGET)
