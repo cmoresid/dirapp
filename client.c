@@ -169,12 +169,12 @@ int start_client() {
 						if (command == ADD_SERVER_C) {
 							// Pipe is used to retrieve the newly created socket
 							// from server
-							targ->socket_pipe = init_server_pipes[1];
+							targ->pipe = init_server_pipes[1];
 							pthread_create(&tid, NULL, init_server, (void*)targ);
 						} else {
 							// Pipe is used to retrieve the socket of the server
 							// to destroy
-							targ->socket_pipe = remove_server_pipes[1];
+							targ->pipe = remove_server_pipes[1];
 							pthread_create(&tid, NULL, remove_server, (void*)targ);
 						}
 					} else if (command == LIST_SERVERS_C){
@@ -183,7 +183,7 @@ int start_client() {
 					} else {
 						// Nicely KILL ALL SERVERS!!
 						kill_servers(servers, remove_server_pipes[1]);
-						printf("\n\t  Good bye!\n\n");
+						printf("\n\t  Goodbye!\n\n");
 						exit(1);
 					}
 					// UNLOCK io_buff
@@ -224,15 +224,41 @@ int start_client() {
 					FD_CLR(server_socket, &master);
 				} else {					
 					byte b;
-					
 					// Receiving data from a server...
-					if ( (b = read_byte(i)) < 0) {
+					b = read_byte(i);
+					if (b < 0) {
 						printf("\n\t  Cannot read number of entries changed.\n");
 						return ((void*) 0);
-					}
-					// Retrieve all updates from a server
-					if (b != 0) {
+					} else if (b > 0 && b < 255) {
+						// Retrieve all updates from a server
 						get_updates(i, (int)b);
+					} else if (b == END_COM){
+						// Error message has been sent from server
+						byte server_buff[128];
+						struct server* err_serv;
+						// LOCK
+						pthread_mutex_lock(&io_lock);
+						if (read_string(i, server_buff, 128) <= 0) {
+							fprintf(stderr, "\n\t  Could not read in error message");
+						} else {
+							err_serv = find_server_ref(i);
+							fprintf(stderr, "\n\t  ** Error from %s:%d --\n",
+								err_serv->host,
+								err_serv->port);
+							fprintf(stderr, "\n\t\t%s\n", server_buff);
+						}
+						// UNLOCK
+						pthread_mutex_unlock(&io_lock);	
+						// LOCK
+						pthread_mutex_lock(&servers_lock);
+						// Remove server ref
+						remove_server_ref(i);
+						// UNLOCK
+						pthread_mutex_unlock(&servers_lock);
+						// Close connection and remove it from
+						// master set
+						close(i);
+						FD_CLR(i, &master);
 					}
 				}
 			}
@@ -282,6 +308,7 @@ void kill_servers(struct serverlist* servers, int pipe) {
 	p = servers->head;
 	count = servers->count;
 	
+	// LOCK
 	pthread_mutex_lock(&servers_lock);
 	if (count != 0) {
 		while (p != NULL) {
@@ -294,6 +321,7 @@ void kill_servers(struct serverlist* servers, int pipe) {
 			p = servers->head;
 		}
 	}
+	// UNLOCK
 	pthread_mutex_unlock(&servers_lock);
 }
 
@@ -337,7 +365,7 @@ void* remove_server(void* arg) {
 	// Last token should be the port
 	port = atoi(strtok(NULL, " "));
 	// Get pipe
-	pipe = server_args->socket_pipe;
+	pipe = server_args->pipe;
 	// Free temporary structures
 	free(server_args->buff);
 	free(server_args);
@@ -358,8 +386,12 @@ void* remove_server(void* arg) {
 		
 		// UNLOCK
 		printf("\n\t  Disconnecting from %s:%d\n", s->host, s->port);
-		disconnect_from_server(s->socket, pipe);
+		if (disconnect_from_server(s->socket, pipe) < 0) {
+			printf("\n\t  Messy disconnect from server.\n");
+		}
 	}
+	
+	free(host);
 	
 	return ((void*)0);
 }
@@ -389,7 +421,7 @@ void* init_server(void* arg) {
 	host = (char*) malloc(len*sizeof(char));
 	strcpy(host, tmp);
 	port = atoi(strtok(NULL, " "));
-	pipe = server_args->socket_pipe;
+	pipe = server_args->pipe;
 	// Setup connection info
 	memset(&server_info, 0, sizeof(struct sockaddr_in));
 	server_info.sin_family = AF_INET;
@@ -516,6 +548,7 @@ void remove_server_ref(int socketfd) {
 		servers->tail = servers->head;
 	} else if (s == servers->head) {
 		servers->head = servers->head->next;
+		servers->head->prev->next = NULL;
 		servers->head->prev = NULL;
 	} else if (s == servers->tail) {
 		servers->tail = servers->tail->prev;
@@ -686,7 +719,7 @@ static void* signal_thread(void* arg) {
         switch (signo) {
             case SIGHUP:
                 // Finish transfers, remove all clients
-                printf("Purging all server connections.\n");
+                printf("\n\t ** Received SIGHUP ; Purging all server connections.\n");
 				kill_servers(servers, pipe);
                 break;
             case SIGTERM:
@@ -715,40 +748,37 @@ int disconnect_from_server(int socketfd, int pipe) {
 	int pipe_buff[1];
 	byte buff[8];
 	
+	// Send request to remove the socket from the
+	// master file descriptor list
 	pipe_buff[0] = socketfd;
 	write(pipe, pipe_buff, 1);
 	
 	if (send_byte(socketfd, REQ_REMOVE1) != 1) {
-		fprintf(stderr, "Could not send byte.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
 	
 	if (send_byte(socketfd, REQ_REMOVE2) != 1) {
-		fprintf(stderr, "Could not send byte.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
 	
 	if (read_byte(socketfd) != END_COM) {
-		fprintf(stderr, "Non-orderly shutdown 1.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
 	
 	if (read_string(socketfd, buff, 8) != 7) {
-		fprintf(stderr, "Non-orderly shutdown 2.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
 	
 	buff[7] = '\0';
 	if (strcmp(buff, "Goodbye") != 0) {
-		fprintf(stderr, "Unrecognized string.\n");
 		shutdown(socketfd, SHUT_RDWR);
 		return -1;
 	}
-
+	// Close the socket now
 	close(socketfd);
 	
 	return 0;

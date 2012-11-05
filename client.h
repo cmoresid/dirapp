@@ -21,8 +21,6 @@
 #include <pthread.h>
 #include "common.h"
 
-#define READ_PIPE 			pipes[0]
-#define WRITE_PIPE			pipes[1]
 #define SPACE				0x20
 
 #define ADD					"add"
@@ -37,11 +35,6 @@
 #define QUIT_C				'4'
 
 #define CMD_CMP(TOK, CMD)	(strcmp(TOK, CMD) == 0)
-
-struct thread_arg {
-	char* buff;
-	int socket_pipe;
-};
 
 struct server {
 	struct server* next;

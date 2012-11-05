@@ -37,6 +37,13 @@
 	#define PATH_MAX    256      	/* Max path size. */
 #endif
 
+struct thread_arg {
+	char* buff;
+	int socket;
+	int pipe;
+	int period;
+};
+
 typedef unsigned char byte;			/* Defines a byte (0-255). */
 
 void err_quit(const char* error);

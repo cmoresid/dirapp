@@ -380,6 +380,7 @@ int difference_direntrylist() {
 	
 	pthread_mutex_unlock(&updatebuff_lock);
 	
+	free(checked);
 	free_direntrylist(prevdir);
 	prevdir = curdir;
 	
@@ -434,9 +435,14 @@ void create_daemon(const char* name) {
 }
 
 static void* signal_thread(void* arg) {
+	struct thread_arg* targ;
     int err, signo;
 	pthread_t tid;
-    int period = (int) arg;
+	
+	targ = (struct thread_arg*) arg;
+    int period = targ->period;
+	int pipe = targ->pipe;
+	free(targ);
 
     for (;;) {
         // Check directory for updates
@@ -452,6 +458,7 @@ static void* signal_thread(void* arg) {
             case SIGHUP:
                 // Finish transfers, remove all clients
                 syslog(LOG_INFO, "Received SIGHUP");
+				kill_clients(pipe, "Server received SIGHUP; Disconnect all clients.");
                 break;
             case SIGALRM:
                 // See if directory has updated
@@ -517,6 +524,32 @@ void* send_updates(void* arg) {
 	return ((void*) 0);
 }
 
+int send_error(int socket, const char* err_msg) {
+	struct client* p;
+	
+	if ((p = find_client_ref(socket)) == NULL) {
+		syslog(LOG_ERR, "Could not find client to disconnect from.");
+		return -1;
+	} else {
+		// LOCK
+		pthread_mutex_lock(p->c_lock);
+		
+		if (send_byte(p->socket, END_COM) <= 0) {
+			syslog(LOG_ERR, "Could not send error byte");
+			return -1;
+		}
+		
+		if (send_string(p->socket, err_msg) <= 0) {
+			syslog(LOG_ERR, "Could not send error string");
+			return -1;
+		}
+		// UNLOCK
+		pthread_mutex_unlock(p->c_lock);
+	}
+	
+	return 0;
+}
+
 void* init_client(void* arg) {
     pthread_t tid;
     int socketfd;
@@ -560,34 +593,88 @@ void* init_client(void* arg) {
 }
 
 void* remove_client(void* arg) {
-	int socketfd = (int) arg;
+	struct thread_arg* targ;
+	
+	targ = (struct thread_arg*) arg;
+	// LOCK
+	pthread_mutex_lock(&clients_lock);
+	// Will block until particular client mutex is released
+	remove_client_ref(targ->socket);
+	// UNLOCK
+	pthread_mutex_unlock(&clients_lock);
+	// Now disconnect from client nicely
+	disconnect_from_client(targ->socket, 0);
+	
+	free(targ);
+	
+	return ((void*) 0);
+}
+
+void kill_clients(int pipe, const char* msg) {
+	struct client* p;
+	int count;
+	int socket;
+	int socket_buff[1];
+	
+	p = clients->head;
+	count = clients->count;
+	
+	// LOCK
+	pthread_mutex_lock(&clients_lock);
+	if (count > 0) {
+		while (p != NULL) {
+			socket = p->socket;
+			
+			socket_buff[0] = socket;
+			write(pipe, socket_buff, 1);
+			
+			send_error(socket, msg);
+			remove_client_ref(p->socket);
+			p = clients->head;
+			close(socket);
+		}
+	}
+	pthread_mutex_unlock(&clients_lock);
+}
+
+int disconnect_from_client(int socketfd, int pipe) {
+	int pipe_buff[1];
 	byte b;
 	
-	// Will block until mutex is released
-	remove_client_ref(socketfd);
+	// Now send request to remove the socket from the
+	// master file descriptor list, only if not already cleared
+	if (pipe > 0) {
+		pipe_buff[0] = socketfd;
+		write(pipe, pipe_buff, 1);
+	}
 	
-	if ( (b = read_byte(socketfd)) != REQ_REMOVE1) {
+	if ((b = read_byte(socketfd)) != REQ_REMOVE1) {
 		syslog(LOG_ERR, "Anticipated 0xDE: Received: 0x%x", b);
 		close(socketfd);
+		return -1;
 	}
 			
-	if ( (b = read_byte(socketfd)) != REQ_REMOVE2) {
+	if ((b = read_byte(socketfd)) != REQ_REMOVE2) {
 		syslog(LOG_ERR, "Anticipated 0xAD: Received: 0x%x", b);
 		close(socketfd);
+		return -1;
 	}
 			
 	if (send_byte(socketfd, END_COM) != 1) {
 		syslog(LOG_ERR, "Could not send byte!");
 		close(socketfd);
+		return -1;
 	}
 			
 	if (send_string(socketfd, GOOD_BYE) != 7) {
 		syslog(LOG_ERR, "Could not send string");
 		close(socketfd);
+		return -1;
 	}
-
+	// Close socket now
 	close(socketfd);
-	return ((void*) 0);
+	
+	return 0;
 }
 
 void add_client_ref(int socketfd) {
@@ -637,15 +724,12 @@ void remove_client_ref(int socketfd) {
 	struct client* ct;
 	struct client* tmp;
 	
-	// LOCK
-	pthread_mutex_lock(&clients_lock);
-	
 	if ( (ct = find_client_ref(socketfd)) == NULL ) {
 		syslog(LOG_ERR, "Could not find client.");
 		exit(1);
 	}
 	
-	// If lock is currently locked, maybe client is trying to send
+	// If lock is currently locked, maybe server is trying to send
 	// out data. Wait until lock is aquired.
 	pthread_mutex_lock(ct->c_lock);
 	
@@ -665,8 +749,7 @@ void remove_client_ref(int socketfd) {
 	}
 
 	// UNLOCK
-	pthread_mutex_unlock(ct->c_lock);
-	pthread_mutex_unlock(&clients_lock);	
+	pthread_mutex_unlock(ct->c_lock);	
 	
 	// Deallocate client now
 	ct->prev = NULL;
@@ -695,7 +778,8 @@ struct client* find_client_ref(int socketfd) {
 
 int start_server(int port_number, const char* dir_name, int period) {
     pthread_t tid;
-    
+	struct thread_arg* targ;
+
     fd_set master;
     fd_set read_fds;
     int fdmax, i;
@@ -705,6 +789,8 @@ int start_server(int port_number, const char* dir_name, int period) {
     struct sockaddr_in local_addr;
     struct sockaddr_in remote_addr;
     socklen_t addr_len;
+	int remove_client_pipes[2];
+	int socket_buff[5];
 
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
@@ -718,6 +804,11 @@ int start_server(int port_number, const char* dir_name, int period) {
 
     strcpy(init_dir, dir_name);
     gperiod = period;
+
+	if (pipe(remove_client_pipes) < 0) {
+		syslog(LOG_ERR, "Cannot create IPC in server.");
+		exit(1);
+	}
 
     if (realpath(dir_name, full_path) == NULL) {
         syslog(LOG_ERR, "Cannot resolve full path.");
@@ -765,22 +856,26 @@ int start_server(int port_number, const char* dir_name, int period) {
 
     syslog(LOG_INFO, "Starting server!");
 
+	FD_SET(remove_client_pipes[0], &master);
     FD_SET(listener, &master);
     fdmax = listener;
 
     prevdir = exploredir((const char*) full_path);
-    print_direntrylist(prevdir);
-    syslog(LOG_INFO, "Number of entries: %i", prevdir->count);
-    
+
     // Create thread to handle signals
-    pthread_create(&tid, NULL, signal_thread, (void*)period);
+	targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
+	targ->period = period;
+	targ->pipe = remove_client_pipes[1];
+    pthread_create(&tid, NULL, signal_thread, (void*)targ);
+
+	int errno;
 
     // Main server loop
     while (1) {
         read_fds = master;
 
         if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
-            syslog(LOG_ERR, "select error");
+            syslog(LOG_ERR, "select: %s", strerror(errno));
             exit(1);
         }
 
@@ -805,9 +900,22 @@ int start_server(int port_number, const char* dir_name, int period) {
 						// updates
                         pthread_create(&tid, NULL, init_client, (void*) newfd);
                     }
-                } else {
+                } else if (i == remove_client_pipes[0]) {
+					// Get the file descriptor of the socket that is to
+					// be removed and store into the first position of
+					// tmp_buff
+					if (read(remove_client_pipes[0], socket_buff, 1) <= 0) {
+						syslog(LOG_ERR, "Cannot read in socket to close.");
+					} else {
+						FD_CLR(socket_buff[0], &master);
+					}
+				} else {
 					// Handle disconnect
-					pthread_create(&tid, NULL, remove_client, (void*) i);
+					targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
+					targ->socket = i;
+					targ->pipe = remove_client_pipes[1];
+					
+					pthread_create(&tid, NULL, remove_client, (void*) targ);
 					FD_CLR(i, &master);
 				}
             }
