@@ -86,13 +86,13 @@ void* send_updates(void* arg);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  start_server
+ *         Name:  start_server(int port_number, const char* dir_name, int period)
  *  Description:  Starts the server functionality of dirapp.
  *	  Arguments:  port_number : The port number which to bind the server to
  * 				  dir_name    : The name/path of directory to monitor
  *				  period      : Time interval to check for updates
  *        Locks:  None
- *      Returns:  void
+ *      Returns:  0
  * =====================================================================================
  */
 int start_server(int port_number, const char* dir_name, int period);

@@ -30,6 +30,7 @@ int main(int argc, const char* argv[]) {
         start_client();
     } else if (argc == 4) {
         int port_number, period;
+		DIR* d;
         // Verify valid port number.
         if ((port_number = atoi(argv[1])) <= 0)
             err_quit("Invalid port number.");
@@ -38,8 +39,11 @@ int main(int argc, const char* argv[]) {
         if (port_number > 65535)
             err_quit("Invalid port number.");
         // Check if directory is valid
-        if (opendir(argv[2]) == NULL)
+        if ( (d = opendir(argv[2])) == NULL) {
             err_quit("Cannot open directory.");
+		} else {
+			closedir(d);
+		}
         // Check valid period
         if ((period = atoi(argv[3])) <= 0)
             err_quit("Invalid period.");

@@ -45,6 +45,8 @@ pthread_mutex_t network_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t iobuff_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Used to keep track of all server connections. */
 struct serverlist* servers;
+/* Used to send socket(s) fd back to main thread to remove from master fd list */
+int remove_server_pipes[2];
 
 int start_client() {	
 	pthread_t tid;					/* Pass to pthread_create */
@@ -58,7 +60,6 @@ int start_client() {
 	int server_socket;				/* Socket FD of server to add */
 	int io_pipes[2];				/* Communication between I/O thread and main thread */
 	int init_server_pipes[2];		/* Between an init_server thread and main thread */
-	int remove_server_pipes[2];		/* Between a remove_server thread and main thread */
 	struct sigaction sa;			/* Used to ignore SIGPIPE */
 	int nbytes;						/* Number of bytes read in */
 	char io_buff[128];				/* Filled from I/O thread */
@@ -115,7 +116,7 @@ int start_client() {
 	// Spawn I/O thread
 	pthread_create(&tid, NULL, handle_input, (void*)io_pipes[1]);
 	// Spawn signal thread
-	pthread_create(&tid, NULL, signal_thread, (void*)remove_server_pipes[1]);
+	pthread_create(&tid, NULL, signal_thread, NULL);
 	
 	// Main loop	
 	FD_SET(io_pipes[0], &master);
@@ -714,9 +715,6 @@ void* handle_input(void* arg) {
 static void* signal_thread(void* arg) {
 	int err;
 	int signo;
-	int pipe;
-	
-	pipe = (int) arg;
 
     for (;;) {
         err = sigwait(&mask, &signo);
@@ -729,17 +727,17 @@ static void* signal_thread(void* arg) {
             case SIGHUP:
                 // Finish transfers, remove all clients
                 printf("\n\t ** Received SIGHUP ; Purging all server connections.\n");
-				kill_servers(servers, pipe);
+				kill_servers(servers, remove_server_pipes[1]);
                 break;
             case SIGTERM:
                 // Same as SIGHUP, then quit
 				printf("\n\t  ** Purging all server connections and quiting.\n\n");
-				kill_servers(servers, pipe);
+				kill_servers(servers, remove_server_pipes[1]);
 				exit(0);
                 break;
 			case SIGINT:
 				printf("\n\t  ** Purging all server connections and quitting.\n\n");
-				kill_servers(servers, pipe);
+				kill_servers(servers, remove_server_pipes[1]);
 				exit(0);
 				break;
             default:
