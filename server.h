@@ -20,6 +20,8 @@
 #define SERVER_H
 
 #include <pthread.h>
+#include <sys/stat.h>
+
 #include "common.h"
 
 /* Ensure mutual exclusion for clients (defined in server.c) */
@@ -42,8 +44,8 @@ struct clientlist {
 
 /* Contains information about directory items. */
 struct direntry {
-    char* filename;
-    struct stat* attrs;
+    char filename[MAX_FILENAME];
+    struct stat attrs;
     struct direntry* next;
 };
 

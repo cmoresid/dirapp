@@ -74,23 +74,16 @@ struct direntrylist* init_direntrylist() {
 
 int free_direntrylist(struct direntrylist* list) {
 	struct direntry* p;
-	struct direntry* tmp;
-	p = list->head;
-	list->head = NULL;
-	list->tail = NULL;
-	
+
+	p = list->head;	
 	while (p != NULL) {
-		// Free attributes
-		free(p->filename);
-		free(p->attrs);
-		// Hold on to next reference
-		tmp = p->next;
-		p->next = NULL;
+		list->head = list->head->next;
 		free(p);
-		p = tmp;
+		p = list->head;
 	}
 	
 	free(list);
+	list = NULL;
 	
 	return 0;
 }
@@ -123,7 +116,7 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
     p = list->head;
 
     while (p != NULL) {
-        if (p->attrs->st_ino == entry->attrs->st_ino) {
+        if (p->attrs.st_ino == entry->attrs.st_ino) {
             return p;
         }
 
@@ -134,7 +127,7 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
 }
 
 struct direntrylist* exploredir(const char* path) {
-    struct stat* fattr;
+    struct stat fattr;
     struct direntrylist* list;
     struct direntry* list_entry;
     struct dirent* entry;
@@ -158,12 +151,11 @@ struct direntrylist* exploredir(const char* path) {
     readdir(dir); // and parent dir  ..
     
     while ( (entry = readdir(dir)) ) {
-        fattr = (struct stat*) malloc(sizeof(struct stat));
         list_entry = (struct direntry*) malloc(sizeof(struct direntry));  
         list_entry->next = NULL;
         memset(list_entry, 0, sizeof(list_entry));
 
-        if (fattr == NULL || list_entry == NULL) {
+        if (list_entry == NULL) {
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Cannot malloc direntry");
             exit(1);
@@ -179,15 +171,19 @@ struct direntrylist* exploredir(const char* path) {
             strcat(abspath, entry->d_name);
         }
 
-        if (stat(abspath, fattr) < 0) {
+        if (stat(abspath, &fattr) < 0) {
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Cannot get stats on file: %s", entry->d_name);
             exit(1);
         }
 
-        list_entry->filename = (char*) malloc((strlen(entry->d_name)+1) * sizeof(char));
+		if (strlen(entry->d_name) > MAX_FILENAME) {
+			syslog(LOG_ERR, "Filename is too long to be saved.");
+			exit(1);
+		}
+
         strcpy(list_entry->filename, entry->d_name);
-        list_entry->attrs = fattr;
+		list_entry->attrs = fattr;	
 
         add_direntry(list, list_entry);
     }
@@ -251,37 +247,37 @@ int difference_direntrylist() {
 		if ( (entry_cur = find_direntry(curdir, entry_prev)) != NULL 
 				&& find_checked(checked, i, entry_prev) == 0) {
 			// Permissions
-			if (entry_prev->attrs->st_mode != entry_cur->attrs->st_mode) {
+			if (entry_prev->attrs.st_mode != entry_cur->attrs.st_mode) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> permissions.");
 				ndiffs++;
 			}
 			// UID
-			if (entry_prev->attrs->st_uid != entry_cur->attrs->st_uid) {
+			if (entry_prev->attrs.st_uid != entry_cur->attrs.st_uid) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> UID owner.");
 				ndiffs++;
 			}
 			// GID
-			if (entry_prev->attrs->st_gid != entry_cur->attrs->st_gid) {
+			if (entry_prev->attrs.st_gid != entry_cur->attrs.st_gid) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> GID owner.");
 				ndiffs++;
 			}
 			// Size
-			if (entry_prev->attrs->st_size != entry_cur->attrs->st_size) {
+			if (entry_prev->attrs.st_size != entry_cur->attrs.st_size) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> size.");
 				ndiffs++;
 			}
 			// Access time
-			if (entry_prev->attrs->st_atime != entry_cur->attrs->st_atime) {
+			if (entry_prev->attrs.st_atime != entry_cur->attrs.st_atime) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> last access time.");
 				ndiffs++;
 			}
 			// Modified time
-			if (entry_prev->attrs->st_mtime != entry_cur->attrs->st_mtime) {
+			if (entry_prev->attrs.st_mtime != entry_cur->attrs.st_mtime) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> last modification time.");
 				ndiffs++;
 			}
 			// File status time
-			if (entry_prev->attrs->st_ctime != entry_cur->attrs->st_ctime) {
+			if (entry_prev->attrs.st_ctime != entry_cur->attrs.st_ctime) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> last file status time.");
 				ndiffs++;
 			}

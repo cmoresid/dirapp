@@ -293,6 +293,9 @@ void get_updates(int socketfd, int numdiffs) {
 			}
 		}
 	}
+	
+	printf("\n");
+	
 	// UNLOCK
 	pthread_mutex_unlock(recv_server->s_lock);
 	pthread_mutex_unlock(&io_lock);
@@ -332,7 +335,7 @@ void list_servers(struct serverlist* servers) {
 	if (servers->count > 0) {
 		printf("\n\t  Connected servers:\n");
 	} else {
-		printf("\n\t  No connected servers\n");
+		printf("\n\t  No connected servers\n\n");
 	}
 	
 	while (tmp != NULL) {
@@ -341,6 +344,9 @@ void list_servers(struct serverlist* servers) {
 		
 		tmp = tmp->next;
 	}
+	
+	printf("\n");
+	
 	pthread_mutex_unlock(&io_lock);
 }
 
@@ -370,9 +376,11 @@ void* remove_server(void* arg) {
 	server_args = NULL;
 	tmp = NULL;
 	
+	pthread_mutex_lock(&io_lock);
 	// Try to find server now to remove
 	if ( (s = find_server_ref2(host, port)) == NULL) {
-		fprintf(stderr, "\n\t  Cannot find connected server.\n");
+		fprintf(stderr, "\n\t  Cannot find connected server.\n\n");
+		pthread_mutex_unlock(&io_lock);
 		return ((void*)1);
 	} else {
 		// Only send termination to request to server
@@ -388,6 +396,8 @@ void* remove_server(void* arg) {
 			printf("\n\t  Messy disconnect from server.\n");
 		}
 	}
+	
+	pthread_mutex_unlock(&io_lock);
 	
 	free(host);
 	
@@ -410,7 +420,7 @@ void* init_server(void* arg) {
 	int results[1];
 	
 	if (servers->count == MAX_SERVERS) {
-		printf("\n\t Cannot connect to any more servers.\n");
+		printf("\n\t Cannot connect to any more servers.\n\n");
 		pthread_exit((void*)1);
 	}
 	
@@ -433,22 +443,24 @@ void* init_server(void* arg) {
 	tmp = NULL;
 	// Ensure valid port
 	if (port < 1024 || port > 65535) {
-		fprintf(stderr, "\n\t  Invalid port number.\n");
+		fprintf(stderr, "\n\t  ** Invalid port number.\n\n");
 		pthread_exit((void*)1);
 	}
 	// Check if hostname is valid.
 	if (server_info.sin_addr.s_addr == 0) {
-		fprintf(stderr, "\n\t  Invalid host name.\n");
+		fprintf(stderr, "\n\t  ** Invalid host name.\n\n");
 		pthread_exit((void*)1);
 	}
 	// Create socket
 	if ( (socketfd = socket(AF_INET, SOCK_STREAM, 0)) < 0 ) {
-        fprintf(stderr, "Could not create socket.\n");
+        fprintf(stderr, "\n\t  ** Could not create socket.\n\n");
 		pthread_exit((void*) 1);
     }
 	// Try to connect to server
 	if (connect(socketfd, (struct sockaddr*)&server_info, sizeof(struct sockaddr_in)) < 0) {
-		fprintf(stderr, "Cannot connect to server.\n");
+		pthread_mutex_lock(&io_lock);
+		fprintf(stderr, "\n\t  ** Cannot connect to server.\n\n");
+		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
     }
 	// Read acknowledgement from server 1
@@ -456,20 +468,26 @@ void* init_server(void* arg) {
 	
 	// Error from server
 	if (b == END_COM) {
+		pthread_mutex_lock(&io_lock);
 		read_string(socketfd, buff, 256);
 		printf("\n\t  ** %s\n", buff);
 		close(socketfd);
+		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
 	}
 	// Make sure b is INIT_CLIENT1
 	if (b != INIT_CLIENT1)  {
-		fprintf(stderr, "Unexpected response. Abort!\n");
+		pthread_mutex_lock(&io_lock);
+		fprintf(stderr, "\n\t ** Unexpected response. Abort!\n\n");
 		close(socketfd);
+		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
 	}
 	// Read acknowledgement from server 1
-	if (read_byte(socketfd) != INIT_CLIENT2) { 
-		fprintf(stderr, "Unexpected response. Abort!\n");
+	if (read_byte(socketfd) != INIT_CLIENT2) {
+		pthread_mutex_lock(&io_lock);
+		fprintf(stderr, "\n\t  ** Unexpected response. Abort!\n\n");
+		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
 	}
 	// Read in the path name
@@ -477,14 +495,14 @@ void* init_server(void* arg) {
 	path = (byte*) malloc(len*sizeof(byte));
 	
 	if (len <= 0) {
-		fprintf(stderr, "Cannot read in string.\n");
+		fprintf(stderr, "\n\t  ** Cannot read in string.\n\n");
 		pthread_exit((void*) 1);
 	} else {
 		strcpy(path, buff);
 	}
 	// Read in period
 	if ( (period = read_byte(socketfd)) <= 0 ) {
-		printf("Cannot read period.\n");
+		fprintf(stderr, "\n\t ** Cannot read period.\n\n");
 		exit(1);
 	}
 	// Done
@@ -494,7 +512,9 @@ void* init_server(void* arg) {
 	results[0] = socketfd;
 	write(pipe, results, 1);
 	
-	printf("\n\t  Directory: %s, Period: %d\n", path, period);
+	pthread_mutex_lock(&io_lock);
+	printf("\n\t  Directory: %s, Period: %d\n\n", path, period);
+	pthread_mutex_unlock(&io_lock);
 
 	return ((void*)0);
 }
@@ -628,13 +648,14 @@ void* handle_input(void* arg) {
 	while (1) {
 		args = 0;
 		offset = 2;
-
+		
+		pthread_mutex_lock(&io_lock);
 		printf("  > ");
 		if (fgets(buff, 100, stdin) != NULL) {
 			// Ignore blank line
 			len = strlen(buff);
 			if (len == 1) {
-				continue;
+				goto unlock;
 			}
 			// Eat name of command
 			token = strtok(buff, " \n");
@@ -652,8 +673,8 @@ void* handle_input(void* arg) {
 			}
 			
 			if (command == INVALID_C) {
-				fprintf(stderr, "\t  Invalid commmand.\n");
-				continue;
+				fprintf(stderr, "\n\t  ** Invalid commmand.\n\n");
+				goto unlock;
 			} else {
 				args++;
 			}
@@ -662,8 +683,8 @@ void* handle_input(void* arg) {
 				token = strtok(NULL, " \n");
 				
 				if (token == NULL) {
-					fprintf(stderr, "\t  Missing arguments.\n");
-					continue;
+					fprintf(stderr, "\n\t  ** Missing arguments.\n\n");
+					goto unlock;
 				} else {
 					do {
 						token_len = strlen(token);
@@ -676,8 +697,8 @@ void* handle_input(void* arg) {
 				}
 				
 				if (args < 3) {
-					fprintf(stderr, "\t  Missing arguments.\n");
-					continue;
+					fprintf(stderr, "\n\t  ** Missing arguments.\n\n");
+					goto unlock;
 				}
 				
 				results[0] = (char) (offset - args + 1);
@@ -707,6 +728,9 @@ void* handle_input(void* arg) {
 			// Write to pipe
 			write(out_pipe, results, (results[0]+1));
 		}
+unlock:	
+		pthread_mutex_unlock(&io_lock);
+		sleep(1);
 	}
 	
 	return ((void*) 0);

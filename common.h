@@ -37,6 +37,8 @@
 	#define PATH_MAX    256      	/* Max path size. */
 #endif
 
+#define MAX_FILENAME	 64			/* Max number of characters in filename */
+
 struct thread_arg {
 	char* buff;
 	int socket;
