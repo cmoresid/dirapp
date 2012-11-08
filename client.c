@@ -393,7 +393,7 @@ void* remove_server(void* arg) {
 		// Only send termination to request to server
 		// if client is currently not receiving updates
 		// from server
-		printf("\n\t  Disconnecting from %s:%d\n\n", s->host, s->port);
+		printf("\n\t  * Disconnecting from %s:%d\n\n", s->host, s->port);
 		
 		pthread_mutex_lock(&servers_lock);
 		remove_server_ref(s->socket);
@@ -442,7 +442,14 @@ void* init_server(void* arg) {
 	// Setup connection info
 	memset(&server_info, 0, sizeof(struct sockaddr_in));
 	server_info.sin_family = AF_INET;
-	server_info.sin_addr.s_addr = inet_addr(host);
+	
+	// 127.0.0.1 <=> localhost
+	if (strcmp(host, "localhost") == 0) {
+		server_info.sin_addr.s_addr = inet_addr("127.0.0.1");
+	} else {
+		server_info.sin_addr.s_addr = inet_addr(host);
+	}
+	
 	server_info.sin_port = htons(port);
 	// Free temporary structures
 	free(server_args->buff);
