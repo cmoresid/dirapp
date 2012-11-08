@@ -34,6 +34,7 @@
 
 #include "server.h"
 #include "common.h"
+#include "mempool.h"
 
 //#define DAEMONIZE
 
@@ -51,12 +52,18 @@ char full_path[PATH_MAX];
 struct clientlist* clients;
 /* The previous contents/attributes of directory being monitored */
 struct direntrylist* prevdir;
+/* The current contents/attributes of directory being monitored */
+struct direntrylist* curdir;
 /* The period to monitor the directory */
 int gperiod;
 /* The update buffer */
 byte update_buff[1024];
 /* Pipe used to send sockets to remove from the master list in the main thread */
 int remove_client_pipes[2];
+/* Memory pool for directory entry nodes */
+struct mempool* direntry_pool;
+/* Absolute path for file names */
+char abspath[PATH_MAX];
 
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
@@ -72,18 +79,19 @@ struct direntrylist* init_direntrylist() {
     return list;
 }
 
-int free_direntrylist(struct direntrylist* list) {
+int reuse_direntrylist(struct direntrylist* list) {
 	struct direntry* p;
 
 	p = list->head;	
 	while (p != NULL) {
 		list->head = list->head->next;
-		free(p);
+		p->next = NULL;
+		mempool_free(direntry_pool, p);
 		p = list->head;
+		list->count--;
 	}
 	
-	free(list);
-	list = NULL;
+	list->tail = list->head;
 	
 	return 0;
 }
@@ -126,13 +134,11 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
     return NULL;
 }
 
-struct direntrylist* exploredir(const char* path) {
+int exploredir(struct direntrylist* list, const char* path) {
     struct stat fattr;
-    struct direntrylist* list;
     struct direntry* list_entry;
     struct dirent* entry;
     DIR* dir;
-    char abspath[PATH_MAX];
     
     if ( (dir = opendir(path)) == NULL ) {
         // Send error message to all clients and then exit
@@ -141,17 +147,11 @@ struct direntrylist* exploredir(const char* path) {
         exit(1);
     }
 
-    if ( (list = init_direntrylist()) == NULL ) {
-		kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
-        syslog(LOG_ERR, "Cannot malloc new direntrylist");
-        exit(1);
-    }
-
     readdir(dir); // eat current dir .
     readdir(dir); // and parent dir  ..
     
     while ( (entry = readdir(dir)) ) {
-        list_entry = (struct direntry*) malloc(sizeof(struct direntry));  
+		list_entry = (struct direntry*) mempool_alloc(direntry_pool, sizeof(struct direntry)); 
         list_entry->next = NULL;
         memset(list_entry, 0, sizeof(list_entry));
 
@@ -194,7 +194,7 @@ struct direntrylist* exploredir(const char* path) {
         exit(1);
     }
 
-    return list;
+    return 0;
 }
 
 int append_diff(int* i_buff, const char* mode, const char* filename, const char* desc) {
@@ -219,16 +219,14 @@ int append_diff(int* i_buff, const char* mode, const char* filename, const char*
 
 int difference_direntrylist() {
 	int ndiffs;
-	struct direntrylist* curdir;
 	struct direntry* entry_prev;
 	struct direntry* entry_cur;
+	struct direntrylist* tmp;
 	int i;
 	int i_buff;
-	int* checked;
 	
 	memset(update_buff, 0, sizeof(update_buff));
-	curdir = exploredir((const char*) full_path); /* Global variable: full_path */
-	checked = (int*) malloc((curdir->count+prevdir->count)*sizeof(int));  /* Global variable: prevdir */
+	exploredir(curdir, (const char*) full_path); /* Global variable: full_path */
 	
 	if (curdir->count == 0 && prevdir->count == 0) {
 		return 0;
@@ -245,7 +243,7 @@ int difference_direntrylist() {
 	entry_prev = prevdir->head;
 	while (entry_prev != NULL) {
 		if ( (entry_cur = find_direntry(curdir, entry_prev)) != NULL 
-				&& find_checked(checked, i, entry_prev) == 0) {
+				&& entry_cur->checked == 0) {
 			// Permissions
 			if (entry_prev->attrs.st_mode != entry_cur->attrs.st_mode) {
 				append_diff(&i_buff, "!", entry_prev->filename, " -> permissions.");
@@ -282,8 +280,8 @@ int difference_direntrylist() {
 				ndiffs++;
 			}
 			
-			checked[i++] = entry_prev;
-			checked[i++] = entry_cur;
+			entry_prev->checked = 1;
+			entry_cur->checked  = 1;
 		} else {
 			append_diff(&i_buff, "-", entry_prev->filename, " ");
 			ndiffs++;
@@ -294,21 +292,21 @@ int difference_direntrylist() {
 	
 	entry_cur = curdir->head;
 	while (entry_cur != NULL) {
-		if (find_checked(checked, i, entry_cur) == 0) {
+		if (entry_cur->checked == 0) {
 			append_diff(&i_buff, "+", entry_cur->filename, " ");
 			ndiffs++;
 		}
 		
 		entry_cur = entry_cur->next;
 	}
-	
 	update_buff[0] = ndiffs;
 	
 	pthread_mutex_unlock(&updatebuff_lock);
 	
-	free(checked);
-	free_direntrylist(prevdir);
+	reuse_direntrylist(prevdir);
+	tmp = prevdir;
 	prevdir = curdir;
+	curdir = tmp;
 	
 	return ndiffs;
 }
@@ -360,9 +358,13 @@ void create_daemon(const char* name) {
 }
 
 static void* signal_thread(void* arg) {
+	pthread_attr_t tattr;
 	struct thread_arg* targ;
     int err, signo;
 	pthread_t tid;
+	
+	pthread_attr_init(&tattr);
+	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
 	
 	targ = (struct thread_arg*) arg;
     int period = targ->period;
@@ -388,7 +390,7 @@ static void* signal_thread(void* arg) {
             case SIGALRM:
                 // See if directory has updated
                 syslog(LOG_INFO, "Received SIGALRM");
-				pthread_create(&tid, NULL, send_updates, NULL);
+				pthread_create(&tid, &tattr, send_updates, NULL);
                 break;
             case SIGTERM:
                 // Same as SIGHUP, then quit
@@ -572,8 +574,9 @@ void kill_clients(int pipe, const char* msg) {
 			
 			socket_buff[0] = socket;
 			write(pipe, socket_buff, 1);
+			sleep(1);
 			
-			send_error(socket, msg);
+			send_error2(socket, msg);
 			remove_client_ref(p->socket);
 			p = clients->head;
 			close(socket);
@@ -724,6 +727,7 @@ struct client* find_client_ref(int socketfd) {
 int start_server(int port_number, const char* dir_name, int period) {
     pthread_t tid;
 	struct thread_arg* targ;
+	pthread_attr_t tattr;
 
     fd_set master;
     fd_set read_fds;
@@ -740,6 +744,11 @@ int start_server(int port_number, const char* dir_name, int period) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sa.sa_handler = SIG_IGN;
+
+	pthread_attr_init(&tattr);
+	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
+
+	direntry_pool = init_mempool(sizeof(struct direntry), 512);
 
 	clients = (struct clientlist*) malloc(sizeof(struct clientlist));
 	clients->head = NULL;
@@ -804,7 +813,11 @@ int start_server(int port_number, const char* dir_name, int period) {
     FD_SET(listener, &master);
     fdmax = listener;
 
-    prevdir = exploredir((const char*) full_path);
+	// Initialize the direntry lists
+	prevdir = init_direntrylist();
+	curdir  = init_direntrylist();
+
+    exploredir(prevdir, (const char*) full_path);
 
     // Create thread to handle signals
 	targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
@@ -842,7 +855,7 @@ int start_server(int port_number, const char* dir_name, int period) {
                                 ntohs(remote_addr.sin_port));
                         // Add client to clients list in order to receive
 						// updates
-                        pthread_create(&tid, NULL, init_client, (void*) newfd);
+                        pthread_create(&tid, &tattr, init_client, (void*) newfd);
                     }
                 } else if (i == remove_client_pipes[0]) {
 					// Get the file descriptor of the socket that is to
@@ -859,7 +872,7 @@ int start_server(int port_number, const char* dir_name, int period) {
 					targ->socket = i;
 					targ->pipe = remove_client_pipes[1];
 					
-					pthread_create(&tid, NULL, remove_client, (void*) targ);
+					pthread_create(&tid, &tattr, remove_client, (void*) targ);
 					FD_CLR(i, &master);
 				}
             }

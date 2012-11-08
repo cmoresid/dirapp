@@ -28,6 +28,8 @@ struct mempool*  init_mempool(unsigned long usize, unsigned long num_units) {
 			new_mempool->free_memblock = cur_unit;
 		}
 	}
+	
+	return new_mempool;
 }
 
 void free_mempool(struct mempool* mp) {

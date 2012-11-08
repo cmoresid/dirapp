@@ -44,6 +44,7 @@ struct clientlist {
 
 /* Contains information about directory items. */
 struct direntry {
+	int checked;
     char filename[MAX_FILENAME];
     struct stat attrs;
     struct direntry* next;
@@ -229,6 +230,6 @@ int replace_direntry(struct direntrylist* list,
  *        Free?:  Yes
  * =====================================================================================
  */
-struct direntrylist* exploredir(const char* path);
+int exploredir(struct direntrylist* list, const char* path);
 
 #endif
