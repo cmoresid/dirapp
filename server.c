@@ -311,17 +311,6 @@ int difference_direntrylist() {
 	return ndiffs;
 }
 
-int find_checked(const int* checked, int size, int addr) {
-	int i;
-	for (i = 0; i < size; i++) {
-		if (checked[i] == addr) {
-			return 1;
-		}
-	}
-	
-	return 0;
-}
-
 void create_daemon(const char* name) {
 	pid_t pid;
 	struct sigaction sa;
@@ -365,15 +354,10 @@ static void* signal_thread(void* arg) {
 	
 	pthread_attr_init(&tattr);
 	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
-	
-	targ = (struct thread_arg*) arg;
-    int period = targ->period;
-	int pipe = targ->pipe;
-	free(targ);
 
     for (;;) {
         // Check directory for updates
-        alarm(period);
+        alarm(gperiod);
 
         err = sigwait(&mask, &signo);
         if (err != 0) {
@@ -385,7 +369,7 @@ static void* signal_thread(void* arg) {
             case SIGHUP:
                 // Finish transfers, remove all clients
                 syslog(LOG_INFO, "Received SIGHUP");
-				kill_clients(pipe, "Server received SIGHUP; Disconnect all clients.");
+				kill_clients(remove_client_pipes[1], "Server received SIGHUP; Disconnect all clients.");
                 break;
             case SIGALRM:
                 // See if directory has updated
@@ -505,7 +489,7 @@ void* init_client(void* arg) {
 		syslog(LOG_INFO, "No more clients can be accepted.");
 		// Tell main thread to remove socket from master list
 		socket_buff[0] = socketfd;
-		write(remove_client_pipes[1], socket_buff, 1);
+		write(remove_client_pipes[1], socket_buff, (int) 1);
 		// Send the error now
 		send_error2(socketfd, "No more clients can be accepted.");
 
@@ -574,11 +558,11 @@ void kill_clients(int pipe, const char* msg) {
 			
 			socket_buff[0] = socket;
 			write(pipe, socket_buff, 1);
-			sleep(1);
 			
 			send_error2(socket, msg);
-			remove_client_ref(p->socket);
+			remove_client_ref(socket);
 			p = clients->head;
+			
 			close(socket);
 		}
 	}
@@ -738,7 +722,8 @@ int start_server(int port_number, const char* dir_name, int period) {
     struct sockaddr_in local_addr;
     struct sockaddr_in remote_addr;
     socklen_t addr_len;
-	int socket_buff[5];
+	int pipe_buff[1];
+	pipe_buff[0] = 0;
 
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
@@ -819,11 +804,8 @@ int start_server(int port_number, const char* dir_name, int period) {
 
     exploredir(prevdir, (const char*) full_path);
 
-    // Create thread to handle signals
-	targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
-	targ->period = period;
-	targ->pipe = remove_client_pipes[1];
-    pthread_create(&tid, NULL, signal_thread, (void*)targ);
+	// Start signal thread
+    pthread_create(&tid, NULL, signal_thread, NULL);
 
 	int errno;
 
@@ -861,10 +843,10 @@ int start_server(int port_number, const char* dir_name, int period) {
 					// Get the file descriptor of the socket that is to
 					// be removed and store into the first position of
 					// tmp_buff
-					if (read(remove_client_pipes[0], socket_buff, 1) <= 0) {
+					if (read(remove_client_pipes[0], pipe_buff, 1) <= 0) {
 						syslog(LOG_ERR, "Cannot read in socket to close.");
 					} else {
-						FD_CLR(socket_buff[0], &master);
+						FD_CLR(pipe_buff[0], &master);
 					}
 				} else {
 					// Handle disconnect

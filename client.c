@@ -335,7 +335,7 @@ void list_servers(struct serverlist* servers) {
 	if (servers->count > 0) {
 		printf("\n\t  Connected servers:\n");
 	} else {
-		printf("\n\t  No connected servers\n\n");
+		printf("\n\t  * No connected servers\n");
 	}
 	
 	while (tmp != NULL) {
@@ -386,12 +386,13 @@ void* remove_server(void* arg) {
 		// Only send termination to request to server
 		// if client is currently not receiving updates
 		// from server
+		printf("\n\t  Disconnecting from %s:%d\n", s->host, s->port);
+		
 		pthread_mutex_lock(&servers_lock);
 		remove_server_ref(s->socket);
 		pthread_mutex_unlock(&servers_lock);
 		
 		// UNLOCK
-		printf("\n\t  Disconnecting from %s:%d\n", s->host, s->port);
 		if (disconnect_from_server(s->socket, pipe) < 0) {
 			printf("\n\t  Messy disconnect from server.\n");
 		}
@@ -750,7 +751,9 @@ static void* signal_thread(void* arg) {
         switch (signo) {
             case SIGHUP:
                 // Finish transfers, remove all clients
-                printf("\n\t ** Received SIGHUP ; Purging all server connections.\n");
+				pthread_mutex_lock(&io_lock);
+                printf("\n\t ** Received SIGHUP ; Purging all server connections.\n\n");
+				pthread_mutex_unlock(&io_lock);
 				kill_servers(servers, remove_server_pipes[1]);
                 break;
             case SIGTERM:

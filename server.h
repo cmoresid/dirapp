@@ -58,7 +58,6 @@ struct direntrylist {
 };
 
 int difference_direntrylist();
-int find_checked(const int* checked, int size, int addr);
 void kill_clients(int pipe, const char* message);
 int disconnect_from_client(int socket, int pipe);
 
