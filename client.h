@@ -131,6 +131,16 @@ int disconnect_from_server(int socketfd, int pipe);
  * =====================================================================================
  */
 static void* signal_thread(void* arg);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  handle_input(void* arg)
+ *  Description:  Thread that handles all input from user (keyboard)
+ *	  Arguments:  None
+ *        Locks:  None
+ *      Returns:  0
+ * =====================================================================================
+ */
 void* handle_input(void* arg);
 void* init_server(void* arg);
 void* remove_server(void* arg);

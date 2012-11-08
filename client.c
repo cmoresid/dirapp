@@ -379,7 +379,7 @@ void* remove_server(void* arg) {
 	pthread_mutex_lock(&io_lock);
 	// Try to find server now to remove
 	if ( (s = find_server_ref2(host, port)) == NULL) {
-		fprintf(stderr, "\n\t  Cannot find connected server.\n\n");
+		fprintf(stderr, "\n\t  ** Cannot find connected server.\n\n");
 		pthread_mutex_unlock(&io_lock);
 		return ((void*)1);
 	} else {
@@ -639,9 +639,10 @@ void* handle_input(void* arg) {
 	int out_pipe, args, offset;
 	size_t len, token_len;
 	char command;
-	char buff[128];
-	char results[128];
+	char buff[32];
+	char results[32];
 	char* token;
+	char b;
 	
 	out_pipe = (int) arg;
 	offset = 2; // Offset of 2
@@ -652,11 +653,14 @@ void* handle_input(void* arg) {
 		
 		pthread_mutex_lock(&io_lock);
 		printf("  > ");
-		if (fgets(buff, 100, stdin) != NULL) {
+		if (fgets(buff, 32, stdin) != NULL) {
 			// Ignore blank line
 			len = strlen(buff);
 			if (len == 1) {
 				goto unlock;
+			} else if (len == 31) {
+				// Flush rest of buffer
+				while ( (b = getc(stdin)) != '\n');
 			}
 			// Eat name of command
 			token = strtok(buff, " \n");
