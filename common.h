@@ -19,6 +19,12 @@
 #ifndef DIRAPP_H
 #define DIRAPP_H
 
+#ifdef TESTS
+	#define SLEEP_TIME	3			/* Give ample time for input during tests */
+#else
+	#define SLEEP_TIME	1			/* For humans */
+#endif
+
 #define	INIT_CLIENT1    0xFE	 	/* Initiates connection.    */
 #define	INIT_CLIENT2    0xED	 	/* Acknowledge connection.  */
 
@@ -33,7 +39,7 @@
 
 #define BUFF_MAX        256
 
-#ifndef PATH_MAX
+#ifndef PATH_MAX					/* Defined in linux, don't overwrite otherwise */
 	#define PATH_MAX    256      	/* Max path size. */
 #endif
 

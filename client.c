@@ -386,7 +386,7 @@ void* remove_server(void* arg) {
 		// Only send termination to request to server
 		// if client is currently not receiving updates
 		// from server
-		printf("\n\t  Disconnecting from %s:%d\n", s->host, s->port);
+		printf("\n\t  Disconnecting from %s:%d\n\n", s->host, s->port);
 		
 		pthread_mutex_lock(&servers_lock);
 		remove_server_ref(s->socket);

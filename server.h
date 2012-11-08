@@ -36,7 +36,7 @@
 #define MODIFIED			9
 #define CHECKED				10
 
-#define CLR_MASK(mask)		(mask = 0);
+#define CLR_MASK(mask)		(mask = 0)
 
 #define SET_PERM(mask)		(mask ^= (1 << PERM))
 #define SET_UID(mask)		(mask ^= (1 << UID))

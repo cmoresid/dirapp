@@ -153,7 +153,8 @@ int exploredir(struct direntrylist* list, const char* path) {
     while ( (entry = readdir(dir)) ) {
 		list_entry = (struct direntry*) mempool_alloc(direntry_pool, sizeof(struct direntry)); 
         list_entry->next = NULL;
-		list_entry->mask = 0;
+		CLR_MASK(list_entry->mask);
+		
         memset(list_entry, 0, sizeof(list_entry));
 
         if (list_entry == NULL) {
@@ -378,6 +379,7 @@ void* send_updates(void* arg) {
 	int more_diffs;
 	
 	diffs = difference_direntrylist();
+	more_diffs = 0;
 	
 	if (diffs > 254) {
 		more_diffs = diffs - 254;
@@ -407,8 +409,9 @@ void* send_updates(void* arg) {
 					
 					if (send_string(p->socket, update_buff) <= 0)
 						syslog(LOG_ERR, "Could not send string");
-						
+					
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				}
 				
 				if (IS_UID(entry->mask)) {
@@ -418,6 +421,7 @@ void* send_updates(void* arg) {
 						syslog(LOG_ERR, "Could not send string");
 						
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				}
 				
 				if (IS_GID(entry->mask)) {
@@ -427,6 +431,7 @@ void* send_updates(void* arg) {
 						syslog(LOG_ERR, "Could not send string");
 						
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				} 
 				
 				if (IS_SIZE(entry->mask)) {
@@ -436,6 +441,7 @@ void* send_updates(void* arg) {
 						syslog(LOG_ERR, "Could not send string");
 						
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				}
 				
 				if (IS_LAT(entry->mask)) {
@@ -445,6 +451,7 @@ void* send_updates(void* arg) {
 						syslog(LOG_ERR, "Could not send string");
 						
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				}
 				
 				if (IS_LMT(entry->mask)) {
@@ -454,6 +461,7 @@ void* send_updates(void* arg) {
 						syslog(LOG_ERR, "Could not send string");
 						
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				}
 				
 				if (IS_LFST(entry->mask)) {
@@ -463,6 +471,7 @@ void* send_updates(void* arg) {
 						syslog(LOG_ERR, "Could not send string");
 						
 					sent++;
+					if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 				}
 			} else if (IS_REMOVED(entry->mask)) {
 				append_diff(update_buff, "-", entry->filename, " ");
@@ -471,6 +480,7 @@ void* send_updates(void* arg) {
 					syslog(LOG_ERR, "Could not send string");
 				
 				sent++;
+				if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 			}
 			
 			entry = entry->next;
@@ -485,6 +495,7 @@ void* send_updates(void* arg) {
 					syslog(LOG_ERR, "Could not send string");
 				
 				sent++;
+				if (sent == diffs && more_diffs > 0) send_byte(p->socket, (byte) more_diffs);
 			}
 			
 			entry = entry->next;

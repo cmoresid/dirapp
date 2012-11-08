@@ -16,4 +16,4 @@ $(TARGET): $(OBJECTS)
 clean:
 	-rm *.o
 	-rm ${TARGET}
-	
+
