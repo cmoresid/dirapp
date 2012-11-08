@@ -24,6 +24,44 @@
 
 #include "common.h"
 
+#define PERM				0
+#define UID					1
+#define GID					2
+#define SIZE				3
+#define LAT					4
+#define LMT					5
+#define LFST				6
+#define ADDED				7
+#define REMOVED				8
+#define MODIFIED			9
+#define CHECKED				10
+
+#define CLR_MASK(mask)		(mask = 0);
+
+#define SET_PERM(mask)		(mask ^= (1 << PERM))
+#define SET_UID(mask)		(mask ^= (1 << UID))
+#define SET_GID(mask)		(mask ^= (1 << GID))
+#define SET_SIZE(mask)		(mask ^= (1 << SIZE))
+#define SET_LAT(mask)		(mask ^= (1 << LAT))
+#define SET_LMT(mask)		(mask ^= (1 << LMT))
+#define SET_LFST(mask)		(mask ^= (1 << LFST))
+#define SET_ADDED(mask)		(mask ^= (1 << ADDED))
+#define SET_REMOVED(mask)	(mask ^= (1 << REMOVED))
+#define SET_MODIFIED(mask)	(mask |= (1 << MODIFIED))
+#define SET_CHECKED(mask)	(mask ^= (1 << CHECKED))
+
+#define IS_PERM(mask)		(mask & (1 << PERM))
+#define IS_UID(mask)		(mask & (1 << UID))
+#define IS_GID(mask)		(mask & (1 << GID))
+#define IS_SIZE(mask)		(mask & (1 << SIZE))
+#define IS_LAT(mask)		(mask & (1 << LAT))
+#define IS_LMT(mask)		(mask & (1 << LMT))
+#define IS_LFST(mask)		(mask & (1 << LFST))
+#define IS_ADDED(mask)		(mask & (1 << ADDED))
+#define IS_REMOVED(mask)	(mask & (1 << REMOVED))
+#define IS_MODIFIED(mask)	(mask & (1 << MODIFIED))
+#define IS_CHECKED(mask)	(mask & (1 << CHECKED))
+
 /* Ensure mutual exclusion for clients (defined in server.c) */
 extern pthread_mutex_t clients_lock;
 
@@ -44,7 +82,7 @@ struct clientlist {
 
 /* Contains information about directory items. */
 struct direntry {
-	int checked;
+	int mask;
     char filename[MAX_FILENAME];
     struct stat attrs;
     struct direntry* next;

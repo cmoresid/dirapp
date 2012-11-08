@@ -57,7 +57,7 @@ struct direntrylist* curdir;
 /* The period to monitor the directory */
 int gperiod;
 /* The update buffer */
-byte update_buff[1024];
+byte update_buff[MAX_FILENAME];
 /* Pipe used to send sockets to remove from the master list in the main thread */
 int remove_client_pipes[2];
 /* Memory pool for directory entry nodes */
@@ -153,6 +153,7 @@ int exploredir(struct direntrylist* list, const char* path) {
     while ( (entry = readdir(dir)) ) {
 		list_entry = (struct direntry*) mempool_alloc(direntry_pool, sizeof(struct direntry)); 
         list_entry->next = NULL;
+		list_entry->mask = 0;
         memset(list_entry, 0, sizeof(list_entry));
 
         if (list_entry == NULL) {
@@ -197,9 +198,8 @@ int exploredir(struct direntrylist* list, const char* path) {
     return 0;
 }
 
-int append_diff(int* i_buff, const char* mode, const char* filename, const char* desc) {
+int append_diff(byte* buff, const char* mode, const char* filename, const char* desc) {
 	size_t len;
-	byte buff[128];
 	memset(buff, 0, sizeof(buff));
 	
 	len = strlen(filename);
@@ -207,12 +207,6 @@ int append_diff(int* i_buff, const char* mode, const char* filename, const char*
 	strcat(buff+1, " ");
 	strcat(buff+2, filename);
 	strcat(buff+2+len, desc);
-	len = strlen(buff+1);
-	
-	strcpy(update_buff+(*i_buff), buff);
-	
-	(*i_buff) += len+1;
-	update_buff[(*i_buff)++] = '\0';
 	
 	return 0;
 }
@@ -221,69 +215,64 @@ int difference_direntrylist() {
 	int ndiffs;
 	struct direntry* entry_prev;
 	struct direntry* entry_cur;
-	struct direntrylist* tmp;
-	int i;
-	int i_buff;
 	
-	memset(update_buff, 0, sizeof(update_buff));
 	exploredir(curdir, (const char*) full_path); /* Global variable: full_path */
 	
 	if (curdir->count == 0 && prevdir->count == 0) {
 		return 0;
 	}
 	
-	i = 0;
-	i_buff = 1;
-	
-	// WHEN YOUR NOT SO TIRED, MAKE SURE YOU DO A PROPER BOUNDS
-	// CHECK ON COPYING INTO THE BUFF buffer.
-	
-	pthread_mutex_lock(&updatebuff_lock);
-	
 	entry_prev = prevdir->head;
 	while (entry_prev != NULL) {
 		if ( (entry_cur = find_direntry(curdir, entry_prev)) != NULL 
-				&& entry_cur->checked == 0) {
+				&& !IS_CHECKED(entry_prev->mask) ) {
 			// Permissions
 			if (entry_prev->attrs.st_mode != entry_cur->attrs.st_mode) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> permissions.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_PERM(entry_prev->mask);
 				ndiffs++;
 			}
 			// UID
 			if (entry_prev->attrs.st_uid != entry_cur->attrs.st_uid) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> UID owner.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_UID(entry_prev->mask);
 				ndiffs++;
 			}
 			// GID
 			if (entry_prev->attrs.st_gid != entry_cur->attrs.st_gid) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> GID owner.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_GID(entry_prev->mask);
 				ndiffs++;
 			}
 			// Size
 			if (entry_prev->attrs.st_size != entry_cur->attrs.st_size) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> size.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_SIZE(entry_prev->mask);
 				ndiffs++;
 			}
 			// Access time
 			if (entry_prev->attrs.st_atime != entry_cur->attrs.st_atime) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> last access time.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_LAT(entry_prev->mask);
 				ndiffs++;
 			}
 			// Modified time
 			if (entry_prev->attrs.st_mtime != entry_cur->attrs.st_mtime) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> last modification time.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_LMT(entry_prev->mask);
 				ndiffs++;
 			}
 			// File status time
 			if (entry_prev->attrs.st_ctime != entry_cur->attrs.st_ctime) {
-				append_diff(&i_buff, "!", entry_prev->filename, " -> last file status time.");
+				SET_MODIFIED(entry_prev->mask);
+				SET_LFST(entry_prev->mask);
 				ndiffs++;
 			}
 			
-			entry_prev->checked = 1;
-			entry_cur->checked  = 1;
+			SET_CHECKED(entry_prev->mask);
+			SET_CHECKED(entry_cur->mask);
 		} else {
-			append_diff(&i_buff, "-", entry_prev->filename, " ");
+			SET_REMOVED(entry_prev->mask);
 			ndiffs++;
 		}
 		
@@ -292,21 +281,13 @@ int difference_direntrylist() {
 	
 	entry_cur = curdir->head;
 	while (entry_cur != NULL) {
-		if (entry_cur->checked == 0) {
-			append_diff(&i_buff, "+", entry_cur->filename, " ");
+		if (!IS_CHECKED(entry_cur->mask)) {
+			SET_ADDED(entry_cur->mask);
 			ndiffs++;
 		}
 		
 		entry_cur = entry_cur->next;
 	}
-	update_buff[0] = ndiffs;
-	
-	pthread_mutex_unlock(&updatebuff_lock);
-	
-	reuse_direntrylist(prevdir);
-	tmp = prevdir;
-	prevdir = curdir;
-	curdir = tmp;
 	
 	return ndiffs;
 }
@@ -348,7 +329,6 @@ void create_daemon(const char* name) {
 
 static void* signal_thread(void* arg) {
 	pthread_attr_t tattr;
-	struct thread_arg* targ;
     int err, signo;
 	pthread_t tid;
 	
@@ -391,46 +371,144 @@ static void* signal_thread(void* arg) {
 
 void* send_updates(void* arg) {
 	struct client* p;
+	struct direntry* entry;
+	struct direntrylist* tmp;
+	int sent;
 	int diffs;
-	int i;
-	int i_update;
-	byte len;
+	int more_diffs;
 	
-	p = clients->head;
 	diffs = difference_direntrylist();
+	
+	if (diffs > 254) {
+		more_diffs = diffs - 254;
+		diffs = 254;
+	}
 	
 	// LOCK
 	pthread_mutex_lock(&clients_lock);
 	
+	p = clients->head;
 	while (p != NULL) {
 		// LOCK
 		pthread_mutex_lock(p->c_lock);
-		pthread_mutex_lock(&updatebuff_lock);
-			
-		if (send_byte(p->socket, update_buff[0]) <= 0) {
+		
+		sent = 0;
+		
+		// Send number of entries that have changed
+		if (send_byte(p->socket, (byte) diffs) <= 0) {
 			syslog(LOG_ERR, "Could not send number of changed entries");
 		}
-			
-		if ((int)update_buff[0] != '0') {
-			i_update = 1;
-			for (i = 0; i < diffs; i++) {
-				len = strlen(update_buff+i_update);
-				
-				if (send_string(p->socket, update_buff+i_update) <= 0) {
-					syslog(LOG_ERR, "Cound not send string");
+		
+		entry = prevdir->head;
+		while (entry != NULL) {
+			if (IS_MODIFIED(entry->mask)) {	
+				if (IS_PERM(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> permissions");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
 				}
 				
-				i_update += (int) (len + 1);
+				if (IS_UID(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> UID");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
+				}
+				
+				if (IS_GID(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> GID");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
+				} 
+				
+				if (IS_SIZE(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> size");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
+				}
+				
+				if (IS_LAT(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> last access time");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
+				}
+				
+				if (IS_LMT(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> last modfied time");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
+				}
+				
+				if (IS_LFST(entry->mask)) {
+					append_diff(update_buff, "!", entry->filename, " -> last file status time");
+					
+					if (send_string(p->socket, update_buff) <= 0)
+						syslog(LOG_ERR, "Could not send string");
+						
+					sent++;
+				}
+			} else if (IS_REMOVED(entry->mask)) {
+				append_diff(update_buff, "-", entry->filename, " ");
+				
+				if (send_string(p->socket, update_buff) <= 0)
+					syslog(LOG_ERR, "Could not send string");
+				
+				sent++;
 			}
+			
+			entry = entry->next;
 		}
 		
-		// UNLOCK
-		pthread_mutex_unlock(&updatebuff_lock);
+		entry = curdir->head;
+		while (entry != NULL) {
+			if (IS_ADDED(entry->mask)) {
+				append_diff(update_buff, "+", entry->filename, " ");
+				
+				if (send_string(p->socket, update_buff) <= 0)
+					syslog(LOG_ERR, "Could not send string");
+				
+				sent++;
+			}
+			
+			entry = entry->next;
+		}
+		
 		pthread_mutex_unlock(p->c_lock);
 		p = p->next;
 	}
 	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
+	
+	// Now reverse the values of prevdir and curdir
+	// i.e. the curdir becomes the old dir
+	reuse_direntrylist(prevdir);
+	tmp = prevdir;
+	prevdir = curdir;
+	curdir = tmp;
+	
+	// Clear bitmasks
+	entry = prevdir->head;
+	while (entry != NULL) {
+		entry->mask = 0;
+		entry = entry->next;
+	}
 	
 	return ((void*) 0);
 }
