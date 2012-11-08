@@ -64,6 +64,12 @@ int remove_client_pipes[2];
 struct mempool* direntry_pool;
 /* Absolute path for file names */
 char abspath[PATH_MAX];
+/* Used to ensure that a socket is removed from the master fd list before proceeding */
+pthread_cond_t sready = PTHREAD_COND_INITIALIZER;
+/* Mutex that protects the sready condition */
+pthread_mutex_t slock = PTHREAD_MUTEX_INITIALIZER;
+/* Used in tandum with slock and sready */
+int done;
 
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
@@ -357,14 +363,17 @@ static void* signal_thread(void* arg) {
                 syslog(LOG_INFO, "Received SIGALRM");
 				pthread_create(&tid, &tattr, send_updates, NULL);
                 break;
+			case SIGINT:
+                syslog(LOG_INFO, "Received SIGINT");
+				kill_clients(remove_client_pipes[1], "Server received SIGINT; Disconnect all clients.");
+				exit(0);
             case SIGTERM:
-                // Same as SIGHUP, then quit
-                syslog(LOG_INFO, "Received SIGTERM"); 
-                break;
+                syslog(LOG_INFO, "Received SIGTERM");
+				kill_clients(remove_client_pipes[1], "Server received SIGTERM; Disconnect all clients.");
+				exit(0);
             default:
                 // Finish transfers, quit
                 syslog(LOG_ERR, "Unexpected signal: %d", signo);
-                //exit(1);
                 break;
         }
     }
@@ -579,6 +588,17 @@ void* init_client(void* arg) {
 		// Tell main thread to remove socket from master list
 		socket_buff[0] = socketfd;
 		write(remove_client_pipes[1], socket_buff, (int) 1);
+		
+		// Make sure that the socket is removed from
+		// the master list before preceding any farther
+		// (Removes a race condition which would cause 
+		// select() to break)
+		pthread_mutex_lock(&slock);
+		while (done == 0)
+			pthread_cond_wait(&sready, &slock);
+		done = 0;
+		pthread_mutex_unlock(&slock);
+		
 		// Send the error now
 		send_error2(socketfd, "No more clients can be accepted.");
 
@@ -608,7 +628,6 @@ void* init_client(void* arg) {
 		exit(1);
 	}
 
-    syslog(LOG_DEBUG, "Spawned new thread to handle client!");
 	return ((void*) 0);
 }
 
@@ -645,16 +664,29 @@ void kill_clients(int pipe, const char* msg) {
 		while (p != NULL) {
 			socket = p->socket;
 			
+			// Send the socket fd to the main thread to remove
+			// it from the master fd list
 			socket_buff[0] = socket;
 			write(pipe, socket_buff, 1);
 			
+			// Make sure that the socket is removed from
+			// the master list before preceding any farther
+			// (Removes a race condition which would cause 
+			// select() to break)
+			pthread_mutex_lock(&slock);
+			while (done == 0)
+				pthread_cond_wait(&sready, &slock);
+			done = 0;
+			pthread_mutex_unlock(&slock);
+			
 			send_error2(socket, msg);
 			remove_client_ref(socket);
-			p = clients->head;
-			
 			close(socket);
+			
+			p = clients->head;
 		}
 	}
+	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
 }
 
@@ -824,6 +856,8 @@ int start_server(int port_number, const char* dir_name, int period) {
 
 	direntry_pool = init_mempool(sizeof(struct direntry), 512);
 
+	done = 0;
+
 	clients = (struct clientlist*) malloc(sizeof(struct clientlist));
 	clients->head = NULL;
 	clients->tail = NULL;
@@ -856,6 +890,7 @@ int start_server(int port_number, const char* dir_name, int period) {
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
     sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGALRM);
 
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
@@ -935,7 +970,14 @@ int start_server(int port_number, const char* dir_name, int period) {
 					if (read(remove_client_pipes[0], pipe_buff, 1) <= 0) {
 						syslog(LOG_ERR, "Cannot read in socket to close.");
 					} else {
+						pthread_mutex_lock(&slock);
 						FD_CLR(pipe_buff[0], &master);
+						done = 1;
+						pthread_mutex_unlock(&slock);
+						
+						// Tell kill_clients or whoever they
+						// can procede
+						pthread_cond_signal(&sready);		
 					}
 				} else {
 					// Handle disconnect

@@ -50,6 +50,7 @@ int remove_server_pipes[2];
 
 int start_client() {	
 	pthread_t tid;					/* Pass to pthread_create */
+	pthread_attr_t tattr;			/* Used to set each thread to be detached */
 	struct thread_arg* targ;		/* Allows passing of multiple arguments to thread */
 	
 	fd_set master;					/* Master list of FDs */
@@ -65,29 +66,35 @@ int start_client() {
 	char io_buff[128];				/* Filled from I/O thread */
 	char* cmd_buff;					/* Filled from I/O thread to contain command args */
 	
+	// Make sure each of these threads a detached, because we don't really
+	// care about the return values in any of the threads
+	pthread_attr_init(&tattr);
+	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
+	
+	// Initialize the linked list representing all the server connections
 	servers = (struct serverlist*) malloc(sizeof(struct serverlist));
 	servers->head = NULL;
 	servers->tail = NULL;
 	servers->count = 0;
 	
+	// Initialize the signal mask to ignore SIGPIPE
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sa.sa_handler = SIG_IGN;
-	
 	if (sigaction(SIGPIPE, &sa, NULL) < 0) {
         printf("SIGPIPE error\n"); 
     }
      
-  	// Signals to block on all threads, except
+  	// Block all signals on every thread, except
 	// the signal thread
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
     sigaddset(&mask, SIGTERM);
 	sigaddset(&mask, SIGINT);
-
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
         printf("pthread_sigmask failed\n");
 
+	// Initialize the file descriptor lists
     FD_ZERO(&master);
     FD_ZERO(&read_fds);
 
@@ -171,12 +178,12 @@ int start_client() {
 							// Pipe is used to retrieve the newly created socket
 							// from server
 							targ->pipe = init_server_pipes[1];
-							pthread_create(&tid, NULL, init_server, (void*)targ);
+							pthread_create(&tid, &tattr, init_server, (void*)targ);
 						} else {
 							// Pipe is used to retrieve the socket of the server
 							// to destroy
 							targ->pipe = remove_server_pipes[1];
-							pthread_create(&tid, NULL, remove_server, (void*)targ);
+							pthread_create(&tid, &tattr, remove_server, (void*)targ);
 						}
 					} else if (command == LIST_SERVERS_C){
 						// Print out connected servers
