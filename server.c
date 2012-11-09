@@ -328,7 +328,6 @@ int difference_direntrylist() {
 
 void create_daemon(const char* name) {
 	pid_t pid;
-	struct sigaction sa;
 
 	umask(0);
 

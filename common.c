@@ -86,10 +86,12 @@ int send_string(int socketfd, const char* str) {
 	len = strlen(str);
 	byte byte_str[len];
 	
+	// Send the length of the string
 	if (send_byte(socketfd, len) != 1) {
 		return -1;
 	}
 	
+	// Now send the string itself
 	strncpy(byte_str, str, len);
 	if (send(socketfd, byte_str, len, 0) <= 0) {
 		return -1;
