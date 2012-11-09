@@ -20,7 +20,7 @@
 #define DIRAPP_H
 
 #ifdef TESTS
-	#define SLEEP_TIME	3			/* Give ample time for input during tests */
+	#define SLEEP_TIME	5			/* Give ample time for input during tests */
 #else
 	#define SLEEP_TIME	1			/* For humans */
 #endif
@@ -39,7 +39,7 @@
 
 #define BUFF_MAX        256
 
-#ifndef PATH_MAX					/* Defined in linux, don't overwrite otherwise */
+#ifndef PATH_MAX					/* Defined in Linux, don't overwrite otherwise */
 	#define PATH_MAX    256      	/* Max path size. */
 #endif
 

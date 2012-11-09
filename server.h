@@ -210,7 +210,8 @@ struct client* find_client_ref(int socketfd);
  *  Description:  Initializes and returns a new direntrylist
  *	  Arguments:  None
  *        Locks:  None
- *      Returns:  A pointer that represents 
+ *      Returns:  A pointer that represents a list of entries within a directory or
+ *				  NULL if memory could not be allocated
  * 		  Free?:  Yes
  * =====================================================================================
  */
@@ -223,50 +224,62 @@ struct direntrylist* init_direntrylist();
  *    Arguments:  list  : Directory list
  *				  entry : Entry to add from the directory list
  *        Locks:  None
- *      Returns:  1 on success, 0 on fail
+ *      Returns:  1 on success, -1 on fail
  * =====================================================================================
  */
 int add_direntry(struct direntrylist* list, struct direntry* entry);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  remove_direntry(struct direntrylist* list, struct direntry* entry)
- *  Description:  Removes a direntry in list if found
- *    Arguments:  list  : Directory list
- *				  entry : Entry to remove from the directory list
+ *         Name:  reuse_direntrylist(struct direntrylist* list)
+ *  Description:  Removes all direntries in the given list, so the list can be reused
+ *    Arguments:  list  : A directory list to recycle
  *        Locks:  None
- *      Returns:  1 on success, 0 on fail
+ *      Returns:  (void)
  * =====================================================================================
  */
-int remove_direntry(struct direntrylist* list, struct direntry* entry);
+void reuse_direntrylist(struct direntrylist* list);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  replace_direntry(struct direntrylist* list, 
- *                                 struct direntry* inlist, 
- *                                 struct direntry* replace)
- *  Description:  Replaces a directory entry in a directory list with another entry
- *    Arguments:  list        : The list of directory entries
- *                inlist      : Entry in list to replace
- *                replacewith : Entry to replace inlist with
+ *         Name:  find_direntry(struct direntrylist* list, struct direntry* entry)
+ *  Description:  Finds the corresponding entry with same inode id in the specified 
+ *                direntrylist instance
+ *    Arguments:  list  : A directory list to search through
+ *				  entry : The entry to find in list
  *        Locks:  None
- *      Returns:  1 on success, 0 on fail
+ *      Returns:  The reference to the direntry with same ionode as entry or NULL if
+ *				  not found
  * =====================================================================================
  */
-int replace_direntry(struct direntrylist* list,
-        struct direntry* inlist,
-        struct direntry* replacewith);
+struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  exploredir(const char* path)
- *  Description:  Explores the given directory.
- *    Arguments:  path : The name/path of directory to explore.
+ *         Name:  exploredir(struct direntrylist* list, const char* path)
+ *  Description:  Builds a direntrylist with the name and attributes of all files in
+ *				  the directory specified by path
+ *    Arguments:  list : Store the results of the exploration in here
+ *				  path : The name/path of directory to explore
  *        Locks:  None
  *      Returns:  A pointer to a directory entry list with the most up-to-date info
  *        Free?:  Yes
  * =====================================================================================
  */
 int exploredir(struct direntrylist* list, const char* path);
+
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  append_diff(buff, mode, filename, desc)
+ *  Description:  Appends the mode, filename, and description of an update to buff
+ *    Arguments:  list : Store the results of the exploration in here
+ *				  path : The name/path of directory to explore
+ *        Locks:  None
+ *      Returns:  A pointer to a directory entry list with the most up-to-date info
+ *        Free?:  Yes
+ * =====================================================================================
+ */
+void append_diff(byte* buff, const char* mode, const char* filename, const char* desc);
 
 #endif

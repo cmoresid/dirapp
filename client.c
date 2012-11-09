@@ -3,7 +3,8 @@
  *
  *       Filename:  client.c
  *
- *    Description:  
+ *    Description:  Contains the implementation of the client functionality of
+ *					dirapp.
  *
  *        Version:  1.0
  *        Created:  24/10/2012 11:30:13
@@ -11,7 +12,7 @@
  *       Compiler:  gcc
  *
  *         Author:  Connor Moreside (conman720), cmoresid@ualberta.ca
- *   Organization:  
+ *   Organization:  CMPUT 379
  *
  * =====================================================================================
  */
@@ -47,9 +48,11 @@ pthread_mutex_t iobuff_lock = PTHREAD_MUTEX_INITIALIZER;
 struct serverlist* servers;
 /* Used to send socket(s) fd back to main thread to remove from master fd list */
 int remove_server_pipes[2];
-
+/* Mutex that protects the client_sready conditioned variable */ 
 pthread_mutex_t client_slock = PTHREAD_MUTEX_INITIALIZER;
+/* Ensures that a socket is removed from the master list prior to continuing */
 pthread_cond_t client_sready = PTHREAD_COND_INITIALIZER;
+/* Changed when condition becomes true */
 int client_done;
 
 int start_client() {	
@@ -75,6 +78,7 @@ int start_client() {
 	pthread_attr_init(&tattr);
 	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
 	
+	// Initialize
 	client_done = 0;
 	
 	// Initialize the linked list representing all the server connections
@@ -109,12 +113,12 @@ int start_client() {
 		fprintf(stderr, "Cannot create I/O pipe\n");
 		exit(1);
 	}
-	// Create pipe to communicate with init_client thread
+	// Create pipe to communicate with an init_client thread
 	if (pipe(init_server_pipes) < 0) {
 		fprintf(stderr, "Cannot create init_client pipe\n");
 		exit(1);
 	}
-	// Create pipe to communicate with remove_client thread
+	// Create pipe to communicate with a remove_client thread
 	if (pipe(remove_server_pipes) < 0) {
 		fprintf(stderr, "Cannot create remove_client pipe\n");
 		exit(1);
@@ -131,15 +135,18 @@ int start_client() {
 	// Spawn signal thread
 	pthread_create(&tid, NULL, signal_thread, NULL);
 	
-	// Main loop	
+	// Allow for I/O multiplexing on the following
+	// pipe file descriptors	
 	FD_SET(io_pipes[0], &master);
 	FD_SET(init_server_pipes[0], &master);
 	FD_SET(remove_server_pipes[0], &master);
 	fdmax = remove_server_pipes[0];
 	
+	// Initialize to default values
 	targ = NULL;
 	cmd_buff = NULL;
 	
+	// Main Loop
 	while (1) {
         read_fds = master;
 
@@ -176,7 +183,11 @@ int start_client() {
 						cmd_buff = (char*) malloc(nbytes*sizeof(char));
 						// NULL terminate the arguments
 						io_buff[nbytes] = '\0';
+						// Copy what was in the IO buffer, into a separate
+						// buffer that contains the arguments to the command
 						strcpy(cmd_buff, io_buff+1);
+						// Initialize structure that contains arguments for
+						// a thread
 						targ = (struct thread_arg*) malloc(sizeof(struct thread_arg));
 						targ->buff = cmd_buff;
 						
@@ -193,16 +204,17 @@ int start_client() {
 						}
 					} else if (command == LIST_SERVERS_C){
 						// Print out connected servers
-						list_servers(servers);
-					} else {
+						list_servers();
+					} else { /* Quit */
 						// Nicely KILL ALL SERVERS!!
-						kill_servers(servers, remove_server_pipes[1]);
+						kill_servers(remove_server_pipes[1]);
 						printf("\n\t  Goodbye!\n\n");
 						exit(1);
 					}
 					// UNLOCK io_buff
 					pthread_mutex_unlock(&iobuff_lock);
-					// Make sure to de-allocate memory in thread.
+					// Make sure to de-allocate memory in thread, else
+					// memory leak
 					cmd_buff = NULL;
 					targ = NULL;
 				} else if (i == init_server_pipes[0]) {
@@ -234,13 +246,16 @@ int start_client() {
 					pthread_mutex_unlock(&iobuff_lock);
 					// Save server socket
 					server_socket = (int) io_buff[0];
-					// Remove socket from listening set
-					
+	
+					// Make sure disconnect_from_server waits until
+					// the socket fd is removed from the master list
+					// else there will be some funky select error
 					pthread_mutex_lock(&client_slock);
 					FD_CLR(server_socket, &master);
 					client_done = 1;
 					pthread_mutex_unlock(&client_slock);
 					
+					// Tell disconnect_from_server it can proceed
 					pthread_cond_signal(&client_sready);
 				} else {					
 					byte b;
@@ -266,6 +281,7 @@ int start_client() {
 						}
 						// UNLOCK
 						pthread_mutex_unlock(&io_lock);	
+						
 						// LOCK
 						pthread_mutex_lock(&servers_lock);
 						// Remove server ref
@@ -286,14 +302,17 @@ int start_client() {
 }
 
 void get_updates(int socketfd, int numdiffs) {
-	byte server_buff[128];
-	struct server* recv_server;
-	int j;
+	byte server_buff[128];			/* Temp buff that holds an update from server */
+	struct server* recv_server;		/* The sever that is sending the update(s) */
+	int j;							/* Index to iterate through updates */
 	
+	// Get server reference to retrieve mutex associated
+	// with it
 	recv_server = find_server_ref(socketfd);
 	
-	// LOCK
+	// LOCK : Write to stdout
 	pthread_mutex_lock(&io_lock);
+	// LOCK : Ensure server cannot be removed while receiving updates
 	pthread_mutex_lock(recv_server->s_lock);
 	printf("\n\t * Updates from %s:%d  --\n", 
 		recv_server->host,
@@ -320,17 +339,14 @@ void get_updates(int socketfd, int numdiffs) {
 	pthread_mutex_unlock(&io_lock);
 }
 
-void kill_servers(struct serverlist* servers, int pipe) {
-	struct server* p;
-	int count;
+void kill_servers(int pipe) {
+	struct server* p;	/* Used to iterate the servers list */
 	int socket;
 	
-	p = servers->head;
-	count = servers->count;
-	
-	// LOCK
+	// LOCK : Make sure servers is not altered externally
 	pthread_mutex_lock(&servers_lock);
-	if (count != 0) {
+	p = servers->head;
+	if (servers->count != 0) {
 		while (p != NULL) {
 			// Only send termination to request to server
 			// if client is currently not receiving updates
@@ -345,10 +361,11 @@ void kill_servers(struct serverlist* servers, int pipe) {
 	pthread_mutex_unlock(&servers_lock);
 }
 
-void list_servers(struct serverlist* servers) {
-	struct server* tmp;
+void list_servers() {
+	struct server* tmp;		/* Used to iterate through servers list */
 	tmp = servers->head;
 	
+	// LOCK : Write to stdout
 	pthread_mutex_lock(&io_lock);
 	
 	if (servers->count > 0) {
@@ -357,6 +374,7 @@ void list_servers(struct serverlist* servers) {
 		printf("\n\t  * No connected servers\n");
 	}
 	
+	// Now print out info of all connected servers
 	while (tmp != NULL) {
 		printf("\t    %s:%d - Directory: %s, Period: %d\n",
 			tmp->host, tmp->port, tmp->path, tmp->period);
@@ -366,41 +384,48 @@ void list_servers(struct serverlist* servers) {
 	
 	printf("\n");
 	
+	// UNLOCK
 	pthread_mutex_unlock(&io_lock);
 }
 
 void* remove_server(void* arg) {
-	struct thread_arg* server_args;
-	struct server* s;
-	char* host;
-	char* tmp;
-	int port;
-	int pipe;
-	size_t len;
+	struct thread_arg* server_args;	/* Thread arguments */
+	struct server* s;				/* Server reference to remove */
+	char* host;						/* The host name (arg) */
+	char* tmp;						/* Temp buffer to store values in */
+	int port;						/* Port number of sever (arg) */
+	int pipe;						/* Pipe used to send socket back to main thread */
+	size_t len;						/* Used to store length of a string */
+	
 	// Get server arguments
 	server_args = (struct thread_arg*) arg;
+	
 	// Store host token
 	tmp = strtok(server_args->buff, " ");
 	len = strlen(tmp);
+	
 	// Copy hostname from temp to host
 	host = (char*) malloc(len*sizeof(char));
 	strcpy(host, tmp);
+	
 	// Last token should be the port
 	port = atoi(strtok(NULL, " "));
+	
 	// Get pipe
 	pipe = server_args->pipe;
+	
 	// Free temporary structures
 	free(server_args->buff);
 	free(server_args);
 	server_args = NULL;
 	tmp = NULL;
 	
+	// LOCK : Write to stdout
 	pthread_mutex_lock(&io_lock);
-	// Try to find server now to remove
+	
+	// Try to find server based on arguments
 	if ( (s = find_server_ref2(host, port)) == NULL) {
 		fprintf(stderr, "\n\t  ** Cannot find connected server.\n\n");
-		pthread_mutex_unlock(&io_lock);
-		return ((void*)1);
 	} else {
 		// Only send termination to request to server
 		// if client is currently not receiving updates
@@ -411,7 +436,6 @@ void* remove_server(void* arg) {
 		remove_server_ref(s->socket);
 		pthread_mutex_unlock(&servers_lock);
 		
-		// UNLOCK
 		if (disconnect_from_server(s->socket, pipe) < 0) {
 			printf("\n\t  Messy disconnect from server.\n");
 		}
@@ -425,32 +449,47 @@ void* remove_server(void* arg) {
 }
 
 void* init_server(void* arg) {
-	struct thread_arg* server_args;
-	char* host;
-	char* tmp;
-	int port;
-	int socketfd;
-	int period;
-	int pipe;
-	struct sockaddr_in server_info;
-	byte buff[256];
-	byte* path;
-	byte b;
-	size_t len;
-	int results[1];
+	struct thread_arg* server_args;	/* Thread arguments */
+	char* host;						/* Host name (arg) */
+	char* tmp;						/* Tmp str storage */
+	int port;						/* Port number (arg) */
+	int socketfd;					/* New socket for server */
+	int period;						/* Server refresh period */
+	int pipe;						/* Used to send newly created 
+									   socket back to main thread */
+	struct sockaddr_in server_info;	/* Store info about server connection */
+	byte buff[256];					/* Used as a tempory buffer in various places */
+	byte* path;						/* Store path of directory being monitored */
+	byte b;							/* Tmp byte */
+	size_t len;						/* Stores length of various strings */
+	int socket_buff[1];				/* Send socketfd back to main thread to add to
+									   master fd list */
 	
+	// MAX_SERVERS defined in common.h
+	// Deny connections to ANY server
 	if (servers->count == MAX_SERVERS) {
+		pthread_mutex_lock(&io_lock);
 		printf("\n\t Cannot connect to any more servers.\n\n");
+		pthread_mutex_unlock(&io_lock);
+		
 		pthread_exit((void*)1);
 	}
 	
+	// Get args from parameter
 	server_args = (struct thread_arg*) arg;
+	
+	// Tokenize based on space
 	tmp = strtok(server_args->buff, " ");
 	len = strlen(tmp);
+	
+	// Get host name from parameter string
 	host = (char*) malloc(len*sizeof(char));
 	strcpy(host, tmp);
+	
+	// Get port number from parameter string
 	port = atoi(strtok(NULL, " "));
 	pipe = server_args->pipe;
+	
 	// Setup connection info
 	memset(&server_info, 0, sizeof(struct sockaddr_in));
 	server_info.sin_family = AF_INET;
@@ -461,28 +500,32 @@ void* init_server(void* arg) {
 	} else {
 		server_info.sin_addr.s_addr = inet_addr(host);
 	}
-	
 	server_info.sin_port = htons(port);
+	
 	// Free temporary structures
 	free(server_args->buff);
 	free(server_args);
 	server_args = NULL;
 	tmp = NULL;
+	
 	// Ensure valid port
 	if (port < 1024 || port > 65535) {
 		fprintf(stderr, "\n\t  ** Invalid port number.\n\n");
 		pthread_exit((void*)1);
 	}
+	
 	// Check if hostname is valid.
 	if (server_info.sin_addr.s_addr == 0) {
 		fprintf(stderr, "\n\t  ** Invalid host name.\n\n");
 		pthread_exit((void*)1);
 	}
+	
 	// Create socket
 	if ( (socketfd = socket(AF_INET, SOCK_STREAM, 0)) < 0 ) {
         fprintf(stderr, "\n\t  ** Could not create socket.\n\n");
 		pthread_exit((void*) 1);
     }
+
 	// Try to connect to server
 	if (connect(socketfd, (struct sockaddr*)&server_info, sizeof(struct sockaddr_in)) < 0) {
 		pthread_mutex_lock(&io_lock);
@@ -490,6 +533,7 @@ void* init_server(void* arg) {
 		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
     }
+
 	// Read acknowledgement from server 1
 	b = read_byte(socketfd);
 	
@@ -502,6 +546,7 @@ void* init_server(void* arg) {
 		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
 	}
+	
 	// Make sure b is INIT_CLIENT1
 	if (b != INIT_CLIENT1)  {
 		pthread_mutex_lock(&io_lock);
@@ -510,6 +555,7 @@ void* init_server(void* arg) {
 		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
 	}
+	
 	// Read acknowledgement from server 1
 	if (read_byte(socketfd) != INIT_CLIENT2) {
 		pthread_mutex_lock(&io_lock);
@@ -517,28 +563,36 @@ void* init_server(void* arg) {
 		pthread_mutex_unlock(&io_lock);
 		pthread_exit((void*) 1);
 	}
+	
 	// Read in the path name
 	len = read_string(socketfd, buff, 256);
 	path = (byte*) malloc(len*sizeof(byte));
 	
+	// Make sure string is valid
 	if (len <= 0) {
 		fprintf(stderr, "\n\t  ** Cannot read in string.\n\n");
 		pthread_exit((void*) 1);
 	} else {
 		strcpy(path, buff);
 	}
+	
 	// Read in period
 	if ( (period = read_byte(socketfd)) <= 0 ) {
 		fprintf(stderr, "\n\t ** Cannot read period.\n\n");
 		exit(1);
 	}
-	// Done
+	
+	// Now add a reference to the server to store in the
+	// servers linked list
 	add_server_ref(host, path, port, period, socketfd);
+	
 	// Send socket fd to main thread so client knows
 	// about it
-	results[0] = socketfd;
-	write(pipe, results, 1);
+	socket_buff[0] = socketfd;
+	write(pipe, socket_buff, 1);
 	
+	// Print out the directory path and the refresh period of
+	// the server
 	pthread_mutex_lock(&io_lock);
 	printf("\n\t  Directory: %s, Period: %d\n\n", path, period);
 	pthread_mutex_unlock(&io_lock);
@@ -547,14 +601,15 @@ void* init_server(void* arg) {
 }
 
 void add_server_ref(const char* host, const char* path, int port, int period, int socketfd) {
-	struct server *s;
+	struct server *s;	/* New reference for server connection */
 
     s = (struct server*) malloc(sizeof(struct server));
     if (s == NULL) {
-		fprintf(stderr, "\n\t  Cannot malloc new server.\n");
+		fprintf(stderr, "\n\t  ** Cannot malloc new server.\n");
 		return;
     }
-
+	
+	// Set up attributes of server reference
 	s->s_lock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
 	pthread_mutex_init(s->s_lock, NULL);
     s->socket = socketfd;
@@ -563,7 +618,7 @@ void add_server_ref(const char* host, const char* path, int port, int period, in
 	s->port = port;
 	s->period = period;
 
-    // LOCK
+    // LOCK : To insert new server reference node
     pthread_mutex_lock(&servers_lock);
 	s->next = NULL;
 	s->prev = NULL;
@@ -588,16 +643,17 @@ void add_server_ref(const char* host, const char* path, int port, int period, in
 }
 
 void remove_server_ref(int socketfd) {
-	struct server* s;
-	struct server* tmp;
+	struct server* s;		/* Server reference to remove */
+	struct server* tmp;		/* Tmp server reference */
 	
+	// Find server reference based on the socket fd
 	if ( (s = find_server_ref(socketfd)) == NULL ) {
 		fprintf(stderr, "\n\t  Cannot find server.\n");
 		return;
 	}
 	
 	// If lock is currently locked, maybe client is trying to send
-	// out data. Wait until lock is aquired.
+	// out data. Wait until lock is aquired
 	pthread_mutex_lock(s->s_lock);
 	
 	if (servers->count == 1) {
@@ -632,9 +688,9 @@ void remove_server_ref(int socketfd) {
 }
 
 struct server* find_server_ref(int socketfd) {
-	struct server* p;
-	p = servers->head;
+	struct server* p;		/* Used to traverse through servers linked list */
 	
+	p = servers->head;
 	while (p != NULL) {
 		if (p->socket == socketfd) {
 			return p;
@@ -647,9 +703,9 @@ struct server* find_server_ref(int socketfd) {
 }
 
 struct server* find_server_ref2(const char* host, int port) {
-	struct server* p;
-	p = servers->head;
+	struct server* p;	/* Used to traverse through servers linked list */
 	
+	p = servers->head;
 	while (p != NULL) {
 		if ( (strcmp(p->host, host) == 0) && (p->port == port) ) {
 			return p;
@@ -761,7 +817,7 @@ void* handle_input(void* arg) {
 		}
 unlock:	
 		pthread_mutex_unlock(&io_lock);
-		sleep(1);
+		sleep(SLEEP_TIME);
 	}
 	
 	return ((void*) 0);
@@ -784,17 +840,17 @@ static void* signal_thread(void* arg) {
 				pthread_mutex_lock(&io_lock);
                 printf("\n\t ** Received SIGHUP ; Purging all server connections.\n\n");
 				pthread_mutex_unlock(&io_lock);
-				kill_servers(servers, remove_server_pipes[1]);
+				kill_servers(remove_server_pipes[1]);
                 break;
             case SIGTERM:
                 // Same as SIGHUP, then quit
 				printf("\n\t  ** Purging all server connections and quiting.\n\n");
-				kill_servers(servers, remove_server_pipes[1]);
+				kill_servers(remove_server_pipes[1]);
 				exit(0);
                 break;
 			case SIGINT:
 				printf("\n\t  ** Purging all server connections and quitting.\n\n");
-				kill_servers(servers, remove_server_pipes[1]);
+				kill_servers(remove_server_pipes[1]);
 				exit(0);
 				break;
             default:

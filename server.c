@@ -36,12 +36,11 @@
 #include "common.h"
 #include "mempool.h"
 
+// Do we want to daemonize?
 //#define DAEMONIZE
 
 /* Ensures mutual exclusion for clients linked list */
 pthread_mutex_t clients_lock = PTHREAD_MUTEX_INITIALIZER;
-/* Ensure update_buff is only accessed one at a time */
-pthread_mutex_t updatebuff_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Shared mask for all threads */
 sigset_t mask;
 /* The name/path of the directory, as passed in the commandline argument */
@@ -72,12 +71,14 @@ pthread_mutex_t slock = PTHREAD_MUTEX_INITIALIZER;
 int done;
 
 struct direntrylist* init_direntrylist() {
-    struct direntrylist* list; 
-    list = (struct direntrylist*) malloc(sizeof(struct direntrylist));
-    
+    struct direntrylist* list;		/* New directory list */ 
+
+	// Allocate memory for a new directory list
+    list = (struct direntrylist*) malloc(sizeof(struct direntrylist));    
     if (list == NULL)
         return NULL;
 
+	// Initialize to default values
     list->count = 0;
     list->head = NULL;
     list->tail = NULL;
@@ -85,25 +86,26 @@ struct direntrylist* init_direntrylist() {
     return list;
 }
 
-int reuse_direntrylist(struct direntrylist* list) {
-	struct direntry* p;
+void reuse_direntrylist(struct direntrylist* list) {
+	struct direntry* p;		/* Used to traverse the linked list */
 
 	p = list->head;	
 	while (p != NULL) {
 		list->head = list->head->next;
 		p->next = NULL;
+		// Return memory back to pool
 		mempool_free(direntry_pool, p);
 		p = list->head;
 		list->count--;
 	}
 	
+	// NULL for both head and tail
 	list->tail = list->head;
-	
-	return 0;
 }
 
 int add_direntry(struct direntrylist* list, struct direntry* entry) {
-    if (list == NULL)
+    // Make sure list is not empty
+	if (list == NULL)
         return -1;
 
     if (list->head == NULL) {               // List is emptry
@@ -123,13 +125,17 @@ int add_direntry(struct direntrylist* list, struct direntry* entry) {
 }
 
 struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry) {
-    if ( (list == NULL) || (list->head == NULL) )
+    struct direntry* p;
+
+	// Make sure list is not empty
+	if (list == NULL)
         return NULL;
 
-    struct direntry* p;
     p = list->head;
-
     while (p != NULL) {
+		// Check for equality based on the inode, which should
+		// be unique under the assumption that all the files
+		// in the monitored directory are on the same filesystem
         if (p->attrs.st_ino == entry->attrs.st_ino) {
             return p;
         }
@@ -141,13 +147,14 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
 }
 
 int exploredir(struct direntrylist* list, const char* path) {
-    struct stat fattr;
-    struct direntry* list_entry;
-    struct dirent** entries;
-    DIR* dir;
-	int n;
-	int i;
+    struct stat fattr;				/* Used to store attributes of a file entry */
+    struct direntry* list_entry;	/* Used to capture information about file entry */
+    struct dirent** entries;		/* Stores each file entry's name and stuff */
+	int n;							/* How many file entries are in the directory */
+	int i;							/* Used to traverse file entries */
     
+	// Alphabetize the entries in the directory since Linux is stupid
+	// and doesn't do this by default, which Mac OS X does...
     if ( (n = scandir(path, &entries, 0, alphasort)) < 0 ) {
         // Send error message to all clients and then exit
 		kill_clients(remove_client_pipes[1], "Cannot open directory! ; Exiting now!");
@@ -155,23 +162,26 @@ int exploredir(struct direntrylist* list, const char* path) {
         exit(1);
     }
 
+	// Delete reference to current directory (.)
 	free(entries[0]);
+	// Delete reference to parent directory (..)
 	free(entries[1]);   
  
+	// Start after . and ..
 	i = 2;
     while (i < n) {
 		list_entry = (struct direntry*) mempool_alloc(direntry_pool, sizeof(struct direntry)); 
         list_entry->next = NULL;
-		CLR_MASK(list_entry->mask);
-		
         memset(list_entry, 0, sizeof(list_entry));
 
         if (list_entry == NULL) {
+			// Mempool has no free nodes and malloc failed
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Cannot malloc direntry");
             exit(1);
         }
 
+		// Make sure absolute path is not too long
         if ((strlen(path) + strlen(entries[i]->d_name) + 1) >= PATH_MAX) {
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Path is too long.");
@@ -182,20 +192,24 @@ int exploredir(struct direntrylist* list, const char* path) {
             strcat(abspath, entries[i]->d_name);
         }
 
+		// Get the attributes of the file entry
         if (stat(abspath, &fattr) < 0) {
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Cannot get stats on file: %s", entries[i]->d_name);
             exit(1);
         }
 
+		// Make sure just the file name is not too long
 		if (strlen(entries[i]->d_name) > MAX_FILENAME) {
 			syslog(LOG_ERR, "Filename is too long to be saved.");
 			exit(1);
 		}
 
+		// Copy the file entry name into direntry representation
         strcpy(list_entry->filename, entries[i]->d_name);
 		list_entry->attrs = fattr;	
 
+		// Add the list entry now
         add_direntry(list, list_entry);
 
 		free(entries[i]);
@@ -207,7 +221,7 @@ int exploredir(struct direntrylist* list, const char* path) {
     return 0;
 }
 
-int append_diff(byte* buff, const char* mode, const char* filename, const char* desc) {
+void append_diff(byte* buff, const char* mode, const char* filename, const char* desc) {
 	size_t len;
 	memset(buff, 0, sizeof(buff));
 	
@@ -216,8 +230,6 @@ int append_diff(byte* buff, const char* mode, const char* filename, const char* 
 	strcat(buff+1, " ");
 	strcat(buff+2, filename);
 	strcat(buff+2+len, desc);
-	
-	return 0;
 }
 
 int difference_direntrylist() {

@@ -91,10 +91,9 @@ void get_updates(int socketfd, int numdiffs);
  *         Name:  kill_servers(struct serverlist* servers, int pipe)
  *  Description:  Disconnect from all connected servers and remove each reference from
  *                servers.
- *	  Arguments:  servers : A list of connected servers
- *				  pipe    : A pipe used to send the socket file descriptors of each
- *							server to the main thread as to clear each socket from the
- *							master file descriptor list
+ *	  Arguments:  pipe :  A pipe used to send the socket file descriptors of each
+ *						 server to the main thread as to clear each socket from the
+ *						 master file descriptor list
  *        Locks:  servers_lock : Ensure that the servers list is not altered while
  *								 updates are being received.
  *				  s_lock       : Don't allow a particular server reference to be removed
@@ -102,7 +101,7 @@ void get_updates(int socketfd, int numdiffs);
  *      Returns:  void
  * =====================================================================================
  */
-void kill_servers(struct serverlist* servers, int pipe);
+void kill_servers(int pipe);
 
 /* 
  * ===  FUNCTION  ======================================================================
@@ -142,14 +141,97 @@ static void* signal_thread(void* arg);
  * =====================================================================================
  */
 void* handle_input(void* arg);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  init_server(struct thread_arg* targ)
+ *  Description:  Thread that handles the setup of a new connection to a server
+ *	  Arguments:  targ->buff : Contains the add command's arguments
+ *				  targ->pipe : The pipe used to send the new socket back to the main
+ *							   thread to add to the master fd list
+ *        Locks:  io_lock : Write to stdout  
+ *      Returns:  (void)
+ * =====================================================================================
+ */
 void* init_server(void* arg);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name: remove_server(struct thread_arg* targ) 
+ *  Description: Thread that removes a server connection based on its socket
+ *	  Arguments: targ->buff : Contains the arguments of the remove command
+ *				 targ->pipe : Contains the pipe fd used to write back the socket
+ *							  of the server to remove from the master fd list
+ *        Locks: io_lock 	  : Write to stdout
+ *				 servers_lock : Ensure nobody else alters servers while removing 
+ *      Returns:  (void)
+ * =====================================================================================
+ */
 void* remove_server(void* arg);
 
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  list_servers(struct serverlist* servers)
+ *  Description:  Prints out all the connected servers specified in servers
+ *	  Arguments:  
+ *        Locks:  servers_lock : Ensure servers is not altered while reading list
+ *      Returns:  (void)
+ * =====================================================================================
+ */
 void list_servers();
 
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  add_server_ref(host, path, port, period, socketfd)
+ *  Description:  Adds a new server reference to servers linked list, based on given 
+ *                parameters 
+ *	  Arguments:  host   : The host name of the server
+ *				  path   : Path/name of the directory being monitored by the server
+ *				  port   : Port number the server is listening on
+ *				  period : The refresh period of the server
+ *        Locks:  servers_lock : Ensure servers is not altered while adding a new server
+ *								 to servers
+ *      Returns:  (void)
+ * =====================================================================================
+ */
 void add_server_ref(const char* host, const char* path, int port, int period, int socketfd);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  remove_server_ref(int socketfd)
+ *  Description:  Removes a server reference based based on the given socket fd
+ *	  Arguments:  socketfd : Socket file descriptor of server reference to remove
+ *        Locks:  servers_lock : Ensure servers is not altered while removing a server
+ *								 from the list
+ *      Returns:  (void)
+ * =====================================================================================
+ */
 void remove_server_ref(int socketfd);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  find_server_ref(int socketfd)
+ *  Description:  Retrieves a server reference from servers based on the socket fd
+ *	  Arguments:  socketfd : The socket fd of the server to retrieve
+ *        Locks:  None
+ *      Returns:  Reference to connected server or NULL if not found
+ *		  Free?:  No
+ * =====================================================================================
+ */
 struct server* find_server_ref(int socketfd);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  find_server_ref2(const char* host, int port)
+ *  Description:  Finds a reference to a connected server based on the given host and
+ *				  port number
+ *	  Arguments:  host : Host name of the server
+ *				  port : Port number of the server
+ *        Locks:  None
+ *      Returns:  Reference to connected server or NULL if not found
+ *		  Free?:  No
+ * =====================================================================================
+ */
 struct server* find_server_ref2(const char* host, int port);
 
-#endif // CLIENT_H
+#endif
