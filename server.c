@@ -71,8 +71,6 @@ pthread_mutex_t slock = PTHREAD_MUTEX_INITIALIZER;
 /* Used in tandum with slock and sready */
 int done;
 
-pthread_mutex_t dir_lock = PTHREAD_MUTEX_INITIALIZER;
-
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
     list = (struct direntrylist*) malloc(sizeof(struct direntrylist));
@@ -229,8 +227,6 @@ int difference_direntrylist() {
 	
 	ndiffs = 0;
 
-	pthread_mutex_lock(&dir_lock);
-
 	exploredir(curdir, (const char*) full_path); /* Global variable: full_path */
 	
 	if (curdir->count == 0 && prevdir->count == 0) {
@@ -304,8 +300,6 @@ int difference_direntrylist() {
 		entry_cur = entry_cur->next;
 	}
 
-	pthread_mutex_unlock(&dir_lock);
-	
 	return ndiffs;
 }
 
@@ -526,8 +520,6 @@ void* send_updates(void* arg) {
 	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
 	
-
-	pthread_mutex_lock(&dir_lock);
 	// Now reverse the values of prevdir and curdir
 	// i.e. the curdir becomes the old dir
 	reuse_direntrylist(prevdir);
@@ -542,8 +534,6 @@ void* send_updates(void* arg) {
 		entry->mask = 0;
 		entry = entry->next;
 	}
-	
-	pthread_mutex_unlock(&dir_lock);
 
 	return ((void*) 0);
 }
