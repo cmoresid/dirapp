@@ -222,9 +222,12 @@ int exploredir(struct direntrylist* list, const char* path) {
 }
 
 void append_diff(byte* buff, const char* mode, const char* filename, const char* desc) {
-	size_t len;
+	size_t len;		/* Used to find length of filename */
+	
+	// Zero out buffer
 	memset(buff, 0, sizeof(buff));
 	
+	// (! OR - OR +) filename human_description
 	len = strlen(filename);
 	strcat(buff, mode);
 	strcat(buff+1, " ");
@@ -233,14 +236,16 @@ void append_diff(byte* buff, const char* mode, const char* filename, const char*
 }
 
 int difference_direntrylist() {
-	int ndiffs;
-	struct direntry* entry_prev;
-	struct direntry* entry_cur;
+	int ndiffs;						/* Number of differences found */
+	struct direntry* entry_prev;	/* Pointer to iterate through previous direntrylist */
+	struct direntry* entry_cur;		/* Pointer to iterate through current direntry list */
 	
 	ndiffs = 0;
 
+	// Populate the curdir list with entries in directory right now
 	exploredir(curdir, (const char*) full_path); /* Global variable: full_path */
 	
+	// No differences if there is no entries in the directory
 	if (curdir->count == 0 && prevdir->count == 0) {
 		return 0;
 	}
@@ -292,9 +297,13 @@ int difference_direntrylist() {
 				ndiffs++;
 			}
 			
+			// Show that the entries have been checked for differences
+			// and not to check them again
 			SET_CHECKED(entry_prev->mask);
 			SET_CHECKED(entry_cur->mask);
 		} else {
+			// If a previous entry cannot be found in the current directory,
+			// it was removed
 			SET_REMOVED(entry_prev->mask);
 			ndiffs++;
 		}
@@ -302,6 +311,8 @@ int difference_direntrylist() {
 		entry_prev = entry_prev->next;
 	}
 	
+	// Now check for any entries that have been added to the monitored
+	// directory
 	entry_cur = curdir->head;
 	while (entry_cur != NULL) {
 		if (!IS_CHECKED(entry_cur->mask)) {
@@ -351,10 +362,13 @@ void create_daemon(const char* name) {
 }
 
 static void* signal_thread(void* arg) {
-	pthread_attr_t tattr;
-    int err, signo;
-	pthread_t tid;
+	pthread_attr_t tattr;		/* Used to set thread to detached mode */
+	int err;					/* Indicates an error from sigwait */
+	int signo;					/* The signal number that has been caught */
+	pthread_t tid;				/* ID of the thread that has been spawnned */
 	
+	// Make sure any threads that are spawned are detached, so the OS
+	// can reclaim the resources in a timely fashion
 	pthread_attr_init(&tattr);
 	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
 
@@ -362,6 +376,7 @@ static void* signal_thread(void* arg) {
         // Check directory for updates
         alarm(gperiod);
 
+		// Block until signal has been caught
         err = sigwait(&mask, &signo);
         if (err != 0) {
             syslog(LOG_ERR, "sigwait failed");
@@ -380,6 +395,7 @@ static void* signal_thread(void* arg) {
 				pthread_create(&tid, &tattr, send_updates, NULL);
                 break;
 			case SIGINT:
+				// Mainly used when not running in daemon mode
                 syslog(LOG_INFO, "Received SIGINT");
 				kill_clients(remove_client_pipes[1], "Server received SIGINT; Disconnect all clients.");
 				exit(0);
@@ -388,7 +404,6 @@ static void* signal_thread(void* arg) {
 				kill_clients(remove_client_pipes[1], "Server received SIGTERM; Disconnect all clients.");
 				exit(0);
             default:
-                // Finish transfers, quit
                 syslog(LOG_ERR, "Unexpected signal: %d", signo);
                 break;
         }
@@ -396,29 +411,34 @@ static void* signal_thread(void* arg) {
 }
 
 void* send_updates(void* arg) {
-	struct client* p;
-	struct direntry* entry;
-	struct direntrylist* tmp;
-	int sent;
-	int diffs;
-	int more_diffs;
+	struct client* p;			/* Pointer to traverse through client list */
+	struct direntry* entry;		/* Pointer to traverse through a direntry list */
+	struct direntrylist* tmp;	/* Used as tmp storage to swap prevdir and curdir */
+	int sent;					/* How many updates have been sent so far */
+	int diffs;					/* The number of differences in monitored directory */
+	int more_diffs;				/* If diffs > 254, save how many more need to be sent */
 
+	// Get number of differences found in monitored directory
 	diffs = difference_direntrylist();
 	more_diffs = 0;
 	
+	// If there are more than 254 changed entries, send the first 254 updates
+	// then send in separate update the rest of the updates
 	if (diffs > 254) {
 		more_diffs = diffs - 254;
 		diffs = 254;
 	}
 	
-	// LOCK
+	// LOCK : Make sure clients is not altered while sending updates
 	pthread_mutex_lock(&clients_lock);
 	
 	p = clients->head;
 	while (p != NULL) {
-		// LOCK
+		// LOCK : Make sure client is not removed while update is being
+		//        sent out
 		pthread_mutex_lock(p->c_lock);
 		
+		// Reset
 		sent = 0;
 		
 		// Send number of entries that have changed
@@ -426,6 +446,8 @@ void* send_updates(void* arg) {
 			syslog(LOG_ERR, "Could not send number of changed entries");
 		}
 		
+		// Now examine bitmask of each entry in prevdir and see if attributes
+		// have changed or if entry has been removed
 		entry = prevdir->head;
 		while (entry != NULL) {
 			if (IS_MODIFIED(entry->mask)) {	
@@ -511,6 +533,8 @@ void* send_updates(void* arg) {
 			entry = entry->next;
 		}
 		
+		// Now examine the current state of the monitored directory and see
+		// if any entries have been added
 		entry = curdir->head;
 		while (entry != NULL) {
 			if (IS_ADDED(entry->mask)) {
@@ -526,13 +550,14 @@ void* send_updates(void* arg) {
 			entry = entry->next;
 		}
 		
+		// UNLOCK
 		pthread_mutex_unlock(p->c_lock);
 		p = p->next;
 	}
 	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
 	
-	// Now reverse the values of prevdir and curdir
+	// Now reverse the roles of prevdir and curdir
 	// i.e. the curdir becomes the old dir
 	reuse_direntrylist(prevdir);
 	tmp = prevdir;
@@ -551,13 +576,14 @@ void* send_updates(void* arg) {
 }
 
 int send_error(int socket, const char* err_msg) {
-	struct client* p;
+	struct client* p;		/* Used to hold client reference */
 	
+	// Try to find client in clients linked list
 	if ((p = find_client_ref(socket)) == NULL) {
 		syslog(LOG_ERR, "Could not find client to disconnect from.");
 		return -1;
 	} else {
-		// LOCK
+		// LOCK : Make all updates have been sent to client first
 		pthread_mutex_lock(p->c_lock);
 		
 		if (send_byte(p->socket, END_COM) <= 0) {
@@ -591,15 +617,15 @@ int send_error2(int socket, const char* err_msg) {
 }
 
 void* init_client(void* arg) {
-    pthread_t tid;
-    int socketfd;
-    size_t len;
-	int socket_buff[1];
+    int socketfd;			/* Socket fd of new client */
+    size_t len;				/* String length */
+	int socket_buff[1];		/* Buffer used to send socket back to main thread */
 
-    tid = pthread_self();
     socketfd = (int) arg;
     len = strlen(init_dir);
 
+	// No more clients are being accepted, remove socket from master list,
+	// and wait until it has been removed properly
 	if (clients->count == MAX_CLIENTS) {
 		syslog(LOG_INFO, "No more clients can be accepted.");
 		// Tell main thread to remove socket from master list
@@ -623,23 +649,30 @@ void* init_client(void* arg) {
 		pthread_exit((void*)1);
 	}
 
+	// Add client to clients linked list
+    pthread_mutex_lock(&clients_lock);
     add_client_ref(socketfd);
+    pthread_mutex_unlock(&clients_lock);
 
+	// Send 0xFE
 	if (send_byte(socketfd, INIT_CLIENT1) != 1) {
 		syslog(LOG_WARNING, "Cannot send init client 1");
 		exit(1);
 	}
 	
+	// Send 0xED
 	if (send_byte(socketfd, INIT_CLIENT2) != 1) {
 		syslog(LOG_WARNING, "Cannot send init client 2");
 		exit(1);
 	}
 	
+	// Send monitored directory name/path
 	if (send_string(socketfd, init_dir) != len) {
 		syslog(LOG_WARNING, "Cannot send path directory");
 		exit(1);
 	}
 	
+	// Send the refresh period
 	if (send_byte(socketfd, gperiod) != 1) {
 		syslog(LOG_WARNING, "Cannot send period");
 		exit(1);
@@ -649,41 +682,39 @@ void* init_client(void* arg) {
 }
 
 void* remove_client(void* arg) {
-	struct thread_arg* targ;
+	struct thread_arg* targ;	/* Thread arguments */
 	
+	// Get thread args
 	targ = (struct thread_arg*) arg;
-	// LOCK
+
+	// LOCK : Make sure clients is not altered
+	//        while trying to remove client ref
 	pthread_mutex_lock(&clients_lock);
-	// Will block until particular client mutex is released
 	remove_client_ref(targ->socket);
-	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
+	
 	// Now disconnect from client nicely
 	disconnect_from_client(targ->socket, 0);
 	
+	// Free thread arg
 	free(targ);
 	
 	return ((void*) 0);
 }
 
 void kill_clients(int pipe, const char* msg) {
-	struct client* p;
-	int count;
-	int socket;
-	int socket_buff[1];
+	struct client* p;			/* Used to traverse clients linked list */
+	int socket_buff[1];			/* Send socket fd to main thread to remove from
+								   master fd list */
 	
-	p = clients->head;
-	count = clients->count;
-	
-	// LOCK
+	// LOCK : Make sure clients is not altered while removing all client connections
 	pthread_mutex_lock(&clients_lock);
-	if (count > 0) {
+	if (clients->count > 0) {
+		p = clients->head;
 		while (p != NULL) {
-			socket = p->socket;
-			
 			// Send the socket fd to the main thread to remove
 			// it from the master fd list
-			socket_buff[0] = socket;
+			socket_buff[0] = p->socket;
 			write(pipe, socket_buff, 1);
 			
 			// Make sure that the socket is removed from
@@ -696,9 +727,9 @@ void kill_clients(int pipe, const char* msg) {
 			done = 0;
 			pthread_mutex_unlock(&slock);
 			
-			send_error2(socket, msg);
-			remove_client_ref(socket);
-			close(socket);
+			send_error(p->socket, msg);
+			close(p->socket);
+			remove_client_ref(p->socket);
 			
 			p = clients->head;
 		}
@@ -748,7 +779,7 @@ int disconnect_from_client(int socketfd, int pipe) {
 }
 
 void add_client_ref(int socketfd) {
-    struct client *ct;
+    struct client *ct;		/* New client reference */
 
 	if (clients == NULL) {
 		clients = (struct clientlist*) malloc(sizeof(struct clientlist));
@@ -757,17 +788,17 @@ void add_client_ref(int socketfd) {
 		clients->count = 0;
 	}
 
+	// Try to allocate space for a new client
     ct = (struct client*) malloc(sizeof(struct client));
     if (ct == NULL) {
         syslog(LOG_ERR, "Cannot malloc new client thread");
 		return;
     }
+
+	// Initialize client ref
 	ct->c_lock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
 	pthread_mutex_init(ct->c_lock, NULL);
     ct->socket = socketfd;
-
-    // LOCK
-    pthread_mutex_lock(&clients_lock);
 	ct->next = NULL;
 	ct->prev = NULL;
 
@@ -785,14 +816,11 @@ void add_client_ref(int socketfd) {
 	}
 	
 	clients->count++;
-
-    // UNLOCK
-    pthread_mutex_unlock(&clients_lock);
 }
 
 void remove_client_ref(int socketfd) {
-	struct client* ct;
-	struct client* tmp;
+	struct client* ct;		/* Client ref to remove */
+	struct client* tmp;		/* Tmp storage */
 	
 	if ( (ct = find_client_ref(socketfd)) == NULL ) {
 		syslog(LOG_ERR, "Could not find client.");
@@ -832,9 +860,9 @@ void remove_client_ref(int socketfd) {
 }
 
 struct client* find_client_ref(int socketfd) {
-	struct client* p;
-	p = clients->head;
+	struct client* p;	/* Client ref with socketfd as its socket */
 	
+	p = clients->head;
 	while (p != NULL) {
 		if (p->socket == socketfd) {
 			return p;

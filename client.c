@@ -207,7 +207,7 @@ int start_client() {
 						list_servers();
 					} else { /* Quit */
 						// Nicely KILL ALL SERVERS!!
-						kill_servers(remove_server_pipes[1]);
+						pthread_create(&tid, &tattr, kill_servers, (void*)remove_server_pipes[1]);
 						printf("\n\t  Goodbye!\n\n");
 						exit(1);
 					}
@@ -339,9 +339,12 @@ void get_updates(int socketfd, int numdiffs) {
 	pthread_mutex_unlock(&io_lock);
 }
 
-void kill_servers(int pipe) {
+void* kill_servers(void* arg) {
 	struct server* p;	/* Used to iterate the servers list */
 	int socket;
+	int pipe;
+	
+	pipe = (int) arg;
 	
 	// LOCK : Make sure servers is not altered externally
 	pthread_mutex_lock(&servers_lock);
@@ -359,6 +362,8 @@ void kill_servers(int pipe) {
 	}
 	// UNLOCK
 	pthread_mutex_unlock(&servers_lock);
+	
+	return ((void*) 0);
 }
 
 void list_servers() {
@@ -367,6 +372,7 @@ void list_servers() {
 	
 	// LOCK : Write to stdout
 	pthread_mutex_lock(&io_lock);
+	pthread_mutex_lock(&servers_lock);
 	
 	if (servers->count > 0) {
 		printf("\n\t  Connected servers:\n");
@@ -385,6 +391,7 @@ void list_servers() {
 	printf("\n");
 	
 	// UNLOCK
+	pthread_mutex_unlock(&servers_lock);
 	pthread_mutex_unlock(&io_lock);
 }
 
@@ -840,17 +847,17 @@ static void* signal_thread(void* arg) {
 				pthread_mutex_lock(&io_lock);
                 printf("\n\t ** Received SIGHUP ; Purging all server connections.\n\n");
 				pthread_mutex_unlock(&io_lock);
-				kill_servers(remove_server_pipes[1]);
+				kill_servers((void*)remove_server_pipes[1]);
                 break;
             case SIGTERM:
                 // Same as SIGHUP, then quit
 				printf("\n\t  ** Purging all server connections and quiting.\n\n");
-				kill_servers(remove_server_pipes[1]);
+				kill_servers((void*)remove_server_pipes[1]);
 				exit(0);
                 break;
 			case SIGINT:
 				printf("\n\t  ** Purging all server connections and quitting.\n\n");
-				kill_servers(remove_server_pipes[1]);
+				kill_servers((void*)remove_server_pipes[1]);
 				exit(0);
 				break;
             default:

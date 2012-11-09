@@ -88,7 +88,7 @@ void get_updates(int socketfd, int numdiffs);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  kill_servers(struct serverlist* servers, int pipe)
+ *         Name:  kill_servers(int pipe)
  *  Description:  Disconnect from all connected servers and remove each reference from
  *                servers.
  *	  Arguments:  pipe :  A pipe used to send the socket file descriptors of each
@@ -101,7 +101,7 @@ void get_updates(int socketfd, int numdiffs);
  *      Returns:  void
  * =====================================================================================
  */
-void kill_servers(int pipe);
+void* kill_servers(void* pipe);
 
 /* 
  * ===  FUNCTION  ======================================================================

@@ -95,7 +95,6 @@ struct direntrylist {
     struct direntry* tail;
 };
 
-int difference_direntrylist();
 void kill_clients(int pipe, const char* message);
 int disconnect_from_client(int socket, int pipe);
 
@@ -115,14 +114,43 @@ void create_daemon(const char* name);
  * ===  FUNCTION  ======================================================================
  *         Name:  send_updates(void* arg)
  *  Description:  Sends updates (if available) to any connected clients.
- *	  Arguments:  arg : The 'period' variable
+ *	  Arguments:  None
  *        Locks:  clients_lock : Ensure clients is not changed while sending out
  *                               updates
+ *				  c_lock       : Aquires lock to a client when sending updates, so
+ *								 client cannot be removed until update has been fully
+ *								 sent
  *
- *      Returns:  void
+ *      Returns:  (void)
  * =====================================================================================
  */
 void* send_updates(void* arg);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  send_error(int socket, const char* err_msg)
+ *  Description:  Sends err_msg to the connected client based on the socket fd
+ *	  Arguments:  socket  : The socket of the connected client to send the error to
+ *				  err_msg : The error message to send to the client
+ *        Locks:  c_lock  : Aquires lock to a client when sending an error, so
+ *						    client cannot be removed and other updates have been sent
+ *                          prior to sending error
+ *      Returns:  1 if no errors, -1 on error
+ * =====================================================================================
+ */
+int send_error(int socket, const char* err_msg);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  send_error2(int socket, const char* err_msg)
+ *  Description:  Sends err_msg to a client that has NOT been added to clients. Mainly
+ *				  used to refuse a connection to a potential client
+ *	  Arguments:  socket  : The socket of the connected client to send the error to
+ *				  err_msg : The error message to send to the client
+ *      Returns:  1 if no errors, -1 on error
+ * =====================================================================================
+ */
+int send_error(int socket, const char* err_msg);
 
 /* 
  * ===  FUNCTION  ======================================================================
@@ -143,18 +171,18 @@ int start_server(int port_number, const char* dir_name, int period);
  *  Description:  Used to spawn a thread that will handle any incoming signal
  *	  Arguments:  arg : The 'period' variable
  *        Locks:  None
- *      Returns:  void
+ *      Returns:  (void)
  * =====================================================================================
  */
 static void* signal_thread(void* arg);
 
 /* 
  * ===  FUNCTION  ======================================================================
- *         Name:  init_client(void* arg)
+ *         Name:  init_client(int socket)
  *  Description:  Handles a client on a separate thread.
- *	  Arguments:  arg : Represents the socket of the new client
+ *	  Arguments:  socket : Represents the socket of the new client
  *        Locks:  clients_lock : Will be locked through a call to add_client_ref(...)
- *      Returns:  void
+ *      Returns:  (void)
  * =====================================================================================
  */
 void* init_client(void* arg);
@@ -164,8 +192,9 @@ void* init_client(void* arg);
  *         Name:  remove_client(void* arg)
  *  Description:  Stops sending updates to a client
  *	  Arguments:  arg : Represents the socket of the client to remove
- *        Locks:  clients_lock : Will be locked through a call to remove_client_ref(...)
- *      Returns:  void
+ *        Locks:  clients_lock : Make sure clients is not altered while trying to
+ *				  remove a client
+ *      Returns:  (void)
  * =====================================================================================
  */
 void* remove_client(void* arg);
@@ -175,8 +204,8 @@ void* remove_client(void* arg);
  *         Name:  add_client_ref(int socketfd)
  *  Description:  Adds new client to a list of clients.
  *	  Arguments:  socketfd: The socket used to identify the client
- *        Locks:  clients_lock : Ensures that only one thread can modify 'clients'
- *      Returns:  void
+ *        Locks:  None
+ *      Returns:  (void)
  * =====================================================================================
  */
 void add_client_ref(int socketfd);
@@ -186,7 +215,8 @@ void add_client_ref(int socketfd);
  *         Name:  remove_client_ref(int socketfd)
  *  Description:  Removes a client from a list of clients.
  *	  Arguments:  socketfd: The socket used to identify the client
- *        Locks:  clients_lock : Ensures that only one thread can modify 'clients'
+ *        Locks:  c_lock : Ensure client is not currently receiving updates before
+ *						   removing
  *      Returns:  void
  * =====================================================================================
  */
@@ -268,6 +298,19 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
  */
 int exploredir(struct direntrylist* list, const char* path);
 
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  difference_direntrylist()
+ *  Description:  Finds all the differences in the monitored directory by setting a
+ *				  bit mask associated with each file entry with all the differences
+ *				  found
+ *    Arguments:  None
+ *        Locks:  None
+ *      Returns:  The number of differences found in the monitored directory
+ * =====================================================================================
+ */
+int difference_direntrylist();
 
 /* 
  * ===  FUNCTION  ======================================================================
