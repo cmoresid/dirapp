@@ -95,10 +95,6 @@ struct direntrylist {
     struct direntry* tail;
 };
 
-void kill_clients(int pipe, const char* message);
-int disconnect_from_client(int socket, int pipe);
-
-
 /* 
  * ===  FUNCTION  ======================================================================
  *         Name:  create_daemon(const char* name)
@@ -151,6 +147,17 @@ int send_error(int socket, const char* err_msg);
  * =====================================================================================
  */
 int send_error(int socket, const char* err_msg);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  disconnect_from_client(int socket, int pipe)
+ *  Description:  Sends the disconnect sequence of bytes to client to signal disconnection
+ *	  Arguments:  socket  : The socket of the connected client to send the disconnect
+ *							signal to
+ *      Returns:  1 if no errors, -1 on error
+ * =====================================================================================
+ */
+int disconnect_from_client(int socket, int pipe);
 
 /* 
  * ===  FUNCTION  ======================================================================
@@ -298,7 +305,6 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
  */
 int exploredir(struct direntrylist* list, const char* path);
 
-
 /* 
  * ===  FUNCTION  ======================================================================
  *         Name:  difference_direntrylist()
@@ -324,5 +330,19 @@ int difference_direntrylist();
  * =====================================================================================
  */
 void append_diff(byte* buff, const char* mode, const char* filename, const char* desc);
+
+/* 
+ * ===  FUNCTION  ======================================================================
+ *         Name:  kill_clients(int pipe, const char* message)
+ *  Description:  Removes all connected clients
+ *    Arguments:  pipe    : Send socket to remove back to main thread
+ *				  message : The message to send to clients explaining disconnect
+ *        Locks:  clients_lock : Make sure clients is not altered while sending error
+ *				  c_lock       : Make sure server is not currently sending updates to
+ *                               particular client
+ *      Returns:  (void)
+ * =====================================================================================
+ */
+void kill_clients(int pipe, const char* message);
 
 #endif

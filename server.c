@@ -340,14 +340,6 @@ void create_daemon(const char* name) {
 
     setsid();
 
-    sa.sa_handler = SIG_IGN;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-
-    if (sigaction(SIGHUP, &sa, NULL) < 0) {
-        err_quit("Can't ignore SIGHUP");
-    }
-
     if (chdir("/") < 0)
         err_quit("Can't switch to root directory.");
 
@@ -739,15 +731,7 @@ void kill_clients(int pipe, const char* msg) {
 }
 
 int disconnect_from_client(int socketfd, int pipe) {
-	int pipe_buff[1];
 	byte b;
-	
-	// Now send request to remove the socket from the
-	// master file descriptor list, only if not already cleared
-	if (pipe > 0) {
-		pipe_buff[0] = socketfd;
-		write(pipe, pipe_buff, 1);
-	}
 	
 	if ((b = read_byte(socketfd)) != REQ_REMOVE1) {
 		syslog(LOG_ERR, "Anticipated 0xDE: Received: 0x%x", b);
@@ -875,47 +859,55 @@ struct client* find_client_ref(int socketfd) {
 }
 
 int start_server(int port_number, const char* dir_name, int period) {
-    pthread_t tid;
-	struct thread_arg* targ;
-	pthread_attr_t tattr;
-
-    fd_set master;
-    fd_set read_fds;
-    int fdmax, i;
-
-    int listener;
-    int newfd;
-    struct sockaddr_in local_addr;
-    struct sockaddr_in remote_addr;
-    socklen_t addr_len;
-	int pipe_buff[1];
+    pthread_t tid;					/* Passed to pthread_create */
+	struct thread_arg* targ;		/* Used to pass arguments to threads */
+	pthread_attr_t tattr;			/* Specifies that thread should be detached */
+    fd_set master;					/* Keep track of all connections / pipes to multiplex */
+    fd_set read_fds;				/* Copy of master for select to populate */
+	int fdmax;						/* Highest numbered file descriptor */
+	int i;							/* Used to index the master fd list */
+    int listener;					/* Listening socket of the server */
+    int newfd;						/* New connection socket fd */
+    struct sockaddr_in local_addr;	/* Local connection info */
+    struct sockaddr_in remote_addr;	/* Remote connection info */
+    socklen_t addr_len;				/* Address length */
+	int pipe_buff[1];				/* Get sockets into here */
 	pipe_buff[0] = 0;
-
+	
+	// Init signal mask
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sa.sa_handler = SIG_IGN;
 
+	// Start each thread in detached mode, since we don't care about
+	// their return values
 	pthread_attr_init(&tattr);
 	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
 
+	// Initialize the memory pool to store the direntries
 	direntry_pool = init_mempool(sizeof(struct direntry), 512);
 
+	// Set done to 0
 	done = 0;
 
+	// Initialize the clients linked list
 	clients = (struct clientlist*) malloc(sizeof(struct clientlist));
 	clients->head = NULL;
 	clients->tail = NULL;
 	clients->count = 0;
 
+	// Copy into global init_dir
     strcpy(init_dir, dir_name);
     gperiod = period;
 
+	// Initialize pipe
 	if (pipe(remove_client_pipes) < 0) {
 		syslog(LOG_ERR, "Cannot create IPC in server.");
 		exit(1);
 	}
 
+	// Get full path of the directory
     if (realpath(dir_name, full_path) == NULL) {
         syslog(LOG_ERR, "Cannot resolve full path.");
         exit(1);
@@ -928,34 +920,42 @@ int start_server(int port_number, const char* dir_name, int period) {
     openlog("dirapp", LOG_CONS, LOG_DAEMON);
 #endif
 
+	// Make sure SIGPIPE is blocked
     if (sigaction(SIGPIPE, &sa, NULL) < 0) {
         syslog(LOG_WARNING, "SIGPIPE error"); 
     }
         
+	// Signals for the signal thread to handle
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
     sigaddset(&mask, SIGTERM);
 	sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGALRM);
 
+	// Set the mask
     if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
         syslog(LOG_WARNING, "pthread_sigmask failed");
 
+	// Initialize file descriptor lists
     FD_ZERO(&master);
     FD_ZERO(&read_fds);
 
+	// Setup local connection info
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin_family = AF_INET;
     local_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     local_addr.sin_port = htons(port_number);
-
+	
+	// Create listener socket
     listener = socket(AF_INET, SOCK_STREAM, 0);
 
+	// Try to bind
     if (bind(listener, (struct sockaddr*)&local_addr, sizeof(local_addr))) {
         syslog(LOG_ERR, "Cannot bind socket to address");    
         exit(1);
     }
 
+	// Now listen!
     if (listen(listener, MAX_CLIENTS) < 0) {
         syslog(LOG_ERR, "Cannot listen on socket");
         exit(1);
@@ -963,6 +963,7 @@ int start_server(int port_number, const char* dir_name, int period) {
 
     syslog(LOG_INFO, "Starting server!");
 
+	// Have select check for incoming data
 	FD_SET(remove_client_pipes[0], &master);
     FD_SET(listener, &master);
     fdmax = listener;
@@ -971,12 +972,13 @@ int start_server(int port_number, const char* dir_name, int period) {
 	prevdir = init_direntrylist();
 	curdir  = init_direntrylist();
 
+	// Initially populate list of file entries in monitored directory
     exploredir(prevdir, (const char*) full_path);
 
 	// Start signal thread
     pthread_create(&tid, NULL, signal_thread, NULL);
 
-	int errno;
+	int errno = 0;
 
     // Main server loop
     while (1) {
@@ -1015,6 +1017,7 @@ int start_server(int port_number, const char* dir_name, int period) {
 					if (read(remove_client_pipes[0], pipe_buff, 1) <= 0) {
 						syslog(LOG_ERR, "Cannot read in socket to close.");
 					} else {
+						// Remove socket from master list
 						pthread_mutex_lock(&slock);
 						FD_CLR(pipe_buff[0], &master);
 						done = 1;

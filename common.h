@@ -20,7 +20,7 @@
 #define DIRAPP_H
 
 #ifdef TESTS
-	#define SLEEP_TIME	5			/* Give ample time for input during tests */
+	#define SLEEP_TIME	3			/* Give ample time for input during tests */
 #else
 	#define SLEEP_TIME	1			/* For humans */
 #endif
@@ -45,6 +45,7 @@
 
 #define MAX_FILENAME	256			/* Max number of characters in filename */
 
+/* Used to pass multiple parameters to a thread */
 struct thread_arg {
 	char* buff;
 	int socket;
