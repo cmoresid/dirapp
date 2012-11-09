@@ -1,5 +1,5 @@
 =============================================================
-                        README DIRAPP
+                       README: DIRAPP
 =============================================================
 
 dirapp is divided into 2 parts: the client and server
@@ -120,12 +120,30 @@ command or has just pressed entered. This ensures that when the
 user is typing something, an update doesn't interrupt their
 command.
 
+
+*************************************************************
+Tests Run
+*************************************************************
+Client --
+1) Connect to multiple servers and alter directory using
+   the 'touch' command
+2) Send SIGHUP to client to disconnect all servers
+
+Server --
+1) Multiple clients connected to server
+2) Disconnect while sending updates
+
+I have not tested the program with other students. I did however
+run it with the provided example and it seems to work just
+fine.
+
 *************************************************************
 Problems
 *************************************************************
 1) When server is "daemonized" (i.e. the macro DAEMONIZE) is defined,
    the SIGHUP functionality stops working and in turn breaks any
-   connected clients. I wish I had time to fix this.
+   connected clients. I wish I had time to fix this. So by default,
+   the server will NOT BE RUN IN DAEMON MODE!
 2) The nastyTests.sh script appears to cause an issue only when I
    run it on a Linux machine. It runs just fine on Mac OS X. It is
    hard to debug the issue since on the school machines you need to
