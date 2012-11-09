@@ -48,6 +48,10 @@ struct serverlist* servers;
 /* Used to send socket(s) fd back to main thread to remove from master fd list */
 int remove_server_pipes[2];
 
+pthread_mutex_t client_slock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t client_sready = PTHREAD_COND_INITIALIZER;
+int client_done;
+
 int start_client() {	
 	pthread_t tid;					/* Pass to pthread_create */
 	pthread_attr_t tattr;			/* Used to set each thread to be detached */
@@ -70,6 +74,8 @@ int start_client() {
 	// care about the return values in any of the threads
 	pthread_attr_init(&tattr);
 	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
+	
+	client_done = 0;
 	
 	// Initialize the linked list representing all the server connections
 	servers = (struct serverlist*) malloc(sizeof(struct serverlist));
@@ -229,7 +235,13 @@ int start_client() {
 					// Save server socket
 					server_socket = (int) io_buff[0];
 					// Remove socket from listening set
+					
+					pthread_mutex_lock(&client_slock);
 					FD_CLR(server_socket, &master);
+					client_done = 1;
+					pthread_mutex_unlock(&client_slock);
+					
+					pthread_cond_signal(&client_sready);
 				} else {					
 					byte b;
 					// Receiving data from a server...
@@ -804,6 +816,12 @@ int disconnect_from_server(int socketfd, int pipe) {
 	// master file descriptor list
 	pipe_buff[0] = socketfd;
 	write(pipe, pipe_buff, 1);
+	
+	pthread_mutex_lock(&client_slock);
+	while (client_done == 0)
+		pthread_cond_wait(&client_sready, &client_slock);
+	client_done = 0;
+	pthread_mutex_unlock(&client_slock);
 	
 	if (send_byte(socketfd, REQ_REMOVE1) != 1) {
 		shutdown(socketfd, SHUT_RDWR);
