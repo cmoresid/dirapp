@@ -71,6 +71,8 @@ pthread_mutex_t slock = PTHREAD_MUTEX_INITIALIZER;
 /* Used in tandum with slock and sready */
 int done;
 
+pthread_mutex_t dir_lock = PTHREAD_MUTEX_INITIALIZER;
+
 struct direntrylist* init_direntrylist() {
     struct direntrylist* list; 
     list = (struct direntrylist*) malloc(sizeof(struct direntrylist));
@@ -143,20 +145,23 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
 int exploredir(struct direntrylist* list, const char* path) {
     struct stat fattr;
     struct direntry* list_entry;
-    struct dirent* entry;
+    struct dirent** entries;
     DIR* dir;
+	int n;
+	int i;
     
-    if ( (dir = opendir(path)) == NULL ) {
+    if ( (n = scandir(path, &entries, 0, alphasort)) < 0 ) {
         // Send error message to all clients and then exit
 		kill_clients(remove_client_pipes[1], "Cannot open directory! ; Exiting now!");
         syslog(LOG_ERR, "Cannot open directory: %s", path);
         exit(1);
     }
 
-    readdir(dir); // eat current dir .
-    readdir(dir); // and parent dir  ..
-    
-    while ( (entry = readdir(dir)) ) {
+	free(entries[0]);
+	free(entries[1]);   
+ 
+	i = 2;
+    while (i < n) {
 		list_entry = (struct direntry*) mempool_alloc(direntry_pool, sizeof(struct direntry)); 
         list_entry->next = NULL;
 		CLR_MASK(list_entry->mask);
@@ -169,38 +174,37 @@ int exploredir(struct direntrylist* list, const char* path) {
             exit(1);
         }
 
-        if ((strlen(path) + strlen(entry->d_name) + 1) >= PATH_MAX) {
+        if ((strlen(path) + strlen(entries[i]->d_name) + 1) >= PATH_MAX) {
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
             syslog(LOG_ERR, "Path is too long.");
             exit(1);
         } else {
             strcpy(abspath, path);
             strcat(abspath, "/");
-            strcat(abspath, entry->d_name);
+            strcat(abspath, entries[i]->d_name);
         }
 
         if (stat(abspath, &fattr) < 0) {
 			kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
-            syslog(LOG_ERR, "Cannot get stats on file: %s", entry->d_name);
+            syslog(LOG_ERR, "Cannot get stats on file: %s", entries[i]->d_name);
             exit(1);
         }
 
-		if (strlen(entry->d_name) > MAX_FILENAME) {
+		if (strlen(entries[i]->d_name) > MAX_FILENAME) {
 			syslog(LOG_ERR, "Filename is too long to be saved.");
 			exit(1);
 		}
 
-        strcpy(list_entry->filename, entry->d_name);
+        strcpy(list_entry->filename, entries[i]->d_name);
 		list_entry->attrs = fattr;	
 
         add_direntry(list, list_entry);
+
+		free(entries[i]);
+		i++;
     }
 
-    if (closedir(dir) < 0) {
-		kill_clients(remove_client_pipes[1], "Unrecoverable server error! ; Exiting now!");
-        syslog(LOG_ERR, "Cannot close directory.");
-        exit(1);
-    }
+	free(entries);	
 
     return 0;
 }
@@ -223,6 +227,10 @@ int difference_direntrylist() {
 	struct direntry* entry_prev;
 	struct direntry* entry_cur;
 	
+	ndiffs = 0;
+
+	pthread_mutex_lock(&dir_lock);
+
 	exploredir(curdir, (const char*) full_path); /* Global variable: full_path */
 	
 	if (curdir->count == 0 && prevdir->count == 0) {
@@ -295,6 +303,8 @@ int difference_direntrylist() {
 		
 		entry_cur = entry_cur->next;
 	}
+
+	pthread_mutex_unlock(&dir_lock);
 	
 	return ndiffs;
 }
@@ -386,7 +396,7 @@ void* send_updates(void* arg) {
 	int sent;
 	int diffs;
 	int more_diffs;
-	
+
 	diffs = difference_direntrylist();
 	more_diffs = 0;
 	
@@ -406,7 +416,7 @@ void* send_updates(void* arg) {
 		sent = 0;
 		
 		// Send number of entries that have changed
-		if (send_byte(p->socket, (byte) diffs) <= 0) {
+		if (send_byte(p->socket, ((byte) diffs)) <= 0) {
 			syslog(LOG_ERR, "Could not send number of changed entries");
 		}
 		
@@ -516,6 +526,8 @@ void* send_updates(void* arg) {
 	// UNLOCK
 	pthread_mutex_unlock(&clients_lock);
 	
+
+	pthread_mutex_lock(&dir_lock);
 	// Now reverse the values of prevdir and curdir
 	// i.e. the curdir becomes the old dir
 	reuse_direntrylist(prevdir);
@@ -523,6 +535,7 @@ void* send_updates(void* arg) {
 	prevdir = curdir;
 	curdir = tmp;
 	
+
 	// Clear bitmasks
 	entry = prevdir->head;
 	while (entry != NULL) {
@@ -530,6 +543,8 @@ void* send_updates(void* arg) {
 		entry = entry->next;
 	}
 	
+	pthread_mutex_unlock(&dir_lock);
+
 	return ((void*) 0);
 }
 
