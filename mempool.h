@@ -1,3 +1,5 @@
+/* Derived from http://www.codeproject.com/Articles/27487/Why-to-use-memory-pool-and-how-to-implement-it */
+
 #ifndef MEMPOOL_H
 #define MEMPOOL_H
 
@@ -68,4 +70,5 @@ void  mempool_free(struct mempool* mp, void* p);
  * =====================================================================================
  */
 void free_mempool(struct mempool* mp);
+
 #endif

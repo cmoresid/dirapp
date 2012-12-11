@@ -1,3 +1,5 @@
+/* Derived from http://www.codeproject.com/Articles/27487/Why-to-use-memory-pool-and-how-to-implement-it */
+
 #include <stdlib.h>
 
 #include "mempool.h"
