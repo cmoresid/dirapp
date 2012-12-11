@@ -1,7 +1,7 @@
 #ifndef MEMPOOL_H
 #define MEMPOOL_H
 
-/* Stores the next and previous beginnings 
+/* Stores the next and previous beginnings
    of an entry in mempool */
 struct memunit {
 	struct memunit* next;
@@ -11,15 +11,15 @@ struct memunit {
 /* A pool of memory */
 struct mempool {
 	void* memblock;
-	
+
 	struct memunit* allocated_memblock;
 	struct memunit* free_memblock;
-	
+
 	unsigned long unit_size;
 	unsigned long memblock_size;
 };
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  init_mempool(unsigned long usize, unsigned long num_units)
  *  Description:  Initializes a mempool structure
@@ -32,7 +32,7 @@ struct mempool {
  */
 struct mempool*  init_mempool(unsigned long usize, unsigned long num_units);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  mempool_alloc(struct mempool* mp, unsigned long usize)
  *  Description:  Returns a portion of memory managed by the memory pool
@@ -46,7 +46,7 @@ struct mempool*  init_mempool(unsigned long usize, unsigned long num_units);
  */
 void* mempool_alloc(struct mempool* mp, unsigned long usize);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  mempool_free(struct mempool* mp, void* p)
  *  Description:  Frees p from mp
@@ -58,7 +58,7 @@ void* mempool_alloc(struct mempool* mp, unsigned long usize);
  */
 void  mempool_free(struct mempool* mp, void* p);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  free_mempool(struct mempool* mp)
  *  Description:  Frees the chunk of memory used by mp
@@ -68,5 +68,4 @@ void  mempool_free(struct mempool* mp, void* p);
  * =====================================================================================
  */
 void free_mempool(struct mempool* mp);
-
 #endif

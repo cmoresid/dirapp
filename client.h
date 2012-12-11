@@ -23,21 +23,21 @@
 
 #include "common.h"
 
-#define SPACE				0x20		/* ASCII value for a space character */
+#define SPACE                           0x20            /* ASCII value for a space character */
 
-#define ADD					"add"		/* String value for the add command */
-#define REMOVE				"remove"	/* String value for the remove command */
-#define LIST				"list"		/* String value for the list command */
-#define QUIT				"quit"		/* String value for the quit command */
+#define ADD                                     "add"           /* String value for the add command */
+#define REMOVE                          "remove"        /* String value for the remove command */
+#define LIST                            "list"          /* String value for the list command */
+#define QUIT                            "quit"          /* String value for the quit command */
 
-#define INVALID_C			'0'			/* Byte value for an invalid command */
-#define ADD_SERVER_C		'1'			/* Byte value for the add server command */
-#define REMOVE_SERVER_C		'2'			/* Byte value for the remove server command */
-#define LIST_SERVERS_C		'3'			/* Byte value for the list servers command */
-#define QUIT_C				'4'			/* Byte value for the quit command */
+#define INVALID_C                       '0'                     /* Byte value for an invalid command */
+#define ADD_SERVER_C            '1'                     /* Byte value for the add server command */
+#define REMOVE_SERVER_C         '2'                     /* Byte value for the remove server command */
+#define LIST_SERVERS_C          '3'                     /* Byte value for the list servers command */
+#define QUIT_C                          '4'                     /* Byte value for the quit command */
 
 /* Macro function to check if the token matches a particular command */
-#define CMD_CMP(TOK, CMD)	(strcmp(TOK, CMD) == 0)
+#define CMD_CMP(TOK, CMD)       (strcmp(TOK, CMD) == 0)
 
 /* Represents a server that a client is connected to */
 struct server {
@@ -58,7 +58,7 @@ struct serverlist {
 	int count;
 };
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  start_client()
  *  Description:  Starts the client functionality of dirapp and initializes the signal
@@ -71,7 +71,7 @@ struct serverlist {
  */
 int start_client();
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  get_updates(int socketfd, int numdiffs)
  *  Description:  Retrieve updates from a given server socket
@@ -86,7 +86,7 @@ int start_client();
  */
 void get_updates(int socketfd, int numdiffs);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  kill_servers(int pipe)
  *  Description:  Disconnect from all connected servers and remove each reference from
@@ -103,7 +103,7 @@ void get_updates(int socketfd, int numdiffs);
  */
 void* kill_servers(void* pipe);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  disconnect_from_server(int socketfd, int pipe)
  *  Description:  Disconnect from a server, based on the given socket corresponding to
@@ -120,7 +120,7 @@ void* kill_servers(void* pipe);
  */
 int disconnect_from_server(int socketfd, int pipe);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  signal_thread(void* arg)
  *  Description:  Thread that handles all signals
@@ -131,7 +131,7 @@ int disconnect_from_server(int socketfd, int pipe);
  */
 static void* signal_thread(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  handle_input(void* arg)
  *  Description:  Thread that handles all input from user (keyboard)
@@ -142,49 +142,49 @@ static void* signal_thread(void* arg);
  */
 void* handle_input(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  init_server(struct thread_arg* targ)
  *  Description:  Thread that handles the setup of a new connection to a server
  *	  Arguments:  targ->buff : Contains the add command's arguments
  *				  targ->pipe : The pipe used to send the new socket back to the main
  *							   thread to add to the master fd list
- *        Locks:  io_lock : Write to stdout  
+ *        Locks:  io_lock : Write to stdout
  *      Returns:  (void)
  * =====================================================================================
  */
 void* init_server(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
- *         Name: remove_server(struct thread_arg* targ) 
+ *         Name: remove_server(struct thread_arg* targ)
  *  Description: Thread that removes a server connection based on its socket
  *	  Arguments: targ->buff : Contains the arguments of the remove command
  *				 targ->pipe : Contains the pipe fd used to write back the socket
  *							  of the server to remove from the master fd list
- *        Locks: io_lock 	  : Write to stdout
- *				 servers_lock : Ensure nobody else alters servers while removing 
+ *        Locks: io_lock          : Write to stdout
+ *				 servers_lock : Ensure nobody else alters servers while removing
  *      Returns:  (void)
  * =====================================================================================
  */
 void* remove_server(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  list_servers(struct serverlist* servers)
  *  Description:  Prints out all the connected servers specified in servers
- *	  Arguments:  
+ *	  Arguments:
  *        Locks:  servers_lock : Ensure servers is not altered while reading list
  *      Returns:  (void)
  * =====================================================================================
  */
 void list_servers();
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  add_server_ref(host, path, port, period, socketfd)
- *  Description:  Adds a new server reference to servers linked list, based on given 
- *                parameters 
+ *  Description:  Adds a new server reference to servers linked list, based on given
+ *                parameters
  *	  Arguments:  host   : The host name of the server
  *				  path   : Path/name of the directory being monitored by the server
  *				  port   : Port number the server is listening on
@@ -196,7 +196,7 @@ void list_servers();
  */
 void add_server_ref(const char* host, const char* path, int port, int period, int socketfd);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  remove_server_ref(int socketfd)
  *  Description:  Removes a server reference based based on the given socket fd
@@ -208,7 +208,7 @@ void add_server_ref(const char* host, const char* path, int port, int period, in
  */
 void remove_server_ref(int socketfd);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  find_server_ref(int socketfd)
  *  Description:  Retrieves a server reference from servers based on the socket fd
@@ -220,7 +220,7 @@ void remove_server_ref(int socketfd);
  */
 struct server* find_server_ref(int socketfd);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  find_server_ref2(const char* host, int port)
  *  Description:  Finds a reference to a connected server based on the given host and
@@ -233,5 +233,4 @@ struct server* find_server_ref(int socketfd);
  * =====================================================================================
  */
 struct server* find_server_ref2(const char* host, int port);
-
 #endif

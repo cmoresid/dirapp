@@ -24,52 +24,52 @@
 
 #include "common.h"
 
-#define PERM				0
-#define UID					1
-#define GID					2
-#define SIZE				3
-#define LAT					4
-#define LMT					5
-#define LFST				6
-#define ADDED				7
-#define REMOVED				8
-#define MODIFIED			9
-#define CHECKED				10
+#define PERM                            0
+#define UID                                     1
+#define GID                                     2
+#define SIZE                            3
+#define LAT                                     4
+#define LMT                                     5
+#define LFST                            6
+#define ADDED                           7
+#define REMOVED                         8
+#define MODIFIED                        9
+#define CHECKED                         10
 
-#define CLR_MASK(mask)		(mask = 0)
+#define CLR_MASK(mask)          (mask = 0)
 
-#define SET_PERM(mask)		(mask ^= (1 << PERM))
-#define SET_UID(mask)		(mask ^= (1 << UID))
-#define SET_GID(mask)		(mask ^= (1 << GID))
-#define SET_SIZE(mask)		(mask ^= (1 << SIZE))
-#define SET_LAT(mask)		(mask ^= (1 << LAT))
-#define SET_LMT(mask)		(mask ^= (1 << LMT))
-#define SET_LFST(mask)		(mask ^= (1 << LFST))
-#define SET_ADDED(mask)		(mask ^= (1 << ADDED))
-#define SET_REMOVED(mask)	(mask ^= (1 << REMOVED))
-#define SET_MODIFIED(mask)	(mask |= (1 << MODIFIED))
-#define SET_CHECKED(mask)	(mask ^= (1 << CHECKED))
+#define SET_PERM(mask)          (mask ^= (1 << PERM))
+#define SET_UID(mask)           (mask ^= (1 << UID))
+#define SET_GID(mask)           (mask ^= (1 << GID))
+#define SET_SIZE(mask)          (mask ^= (1 << SIZE))
+#define SET_LAT(mask)           (mask ^= (1 << LAT))
+#define SET_LMT(mask)           (mask ^= (1 << LMT))
+#define SET_LFST(mask)          (mask ^= (1 << LFST))
+#define SET_ADDED(mask)         (mask ^= (1 << ADDED))
+#define SET_REMOVED(mask)       (mask ^= (1 << REMOVED))
+#define SET_MODIFIED(mask)      (mask |= (1 << MODIFIED))
+#define SET_CHECKED(mask)       (mask ^= (1 << CHECKED))
 
-#define IS_PERM(mask)		(mask & (1 << PERM))
-#define IS_UID(mask)		(mask & (1 << UID))
-#define IS_GID(mask)		(mask & (1 << GID))
-#define IS_SIZE(mask)		(mask & (1 << SIZE))
-#define IS_LAT(mask)		(mask & (1 << LAT))
-#define IS_LMT(mask)		(mask & (1 << LMT))
-#define IS_LFST(mask)		(mask & (1 << LFST))
-#define IS_ADDED(mask)		(mask & (1 << ADDED))
-#define IS_REMOVED(mask)	(mask & (1 << REMOVED))
-#define IS_MODIFIED(mask)	(mask & (1 << MODIFIED))
-#define IS_CHECKED(mask)	(mask & (1 << CHECKED))
+#define IS_PERM(mask)           (mask & (1 << PERM))
+#define IS_UID(mask)            (mask & (1 << UID))
+#define IS_GID(mask)            (mask & (1 << GID))
+#define IS_SIZE(mask)           (mask & (1 << SIZE))
+#define IS_LAT(mask)            (mask & (1 << LAT))
+#define IS_LMT(mask)            (mask & (1 << LMT))
+#define IS_LFST(mask)           (mask & (1 << LFST))
+#define IS_ADDED(mask)          (mask & (1 << ADDED))
+#define IS_REMOVED(mask)        (mask & (1 << REMOVED))
+#define IS_MODIFIED(mask)       (mask & (1 << MODIFIED))
+#define IS_CHECKED(mask)        (mask & (1 << CHECKED))
 
 /* Ensure mutual exclusion for clients (defined in server.c) */
 extern pthread_mutex_t clients_lock;
 
 /* Contains information about connected clients. */
 struct client {
-    struct client* next;
+	struct client* next;
 	struct client* prev;
-    int socket;
+	int socket;
 	pthread_mutex_t* c_lock;
 };
 
@@ -83,19 +83,19 @@ struct clientlist {
 /* Contains information about directory items. */
 struct direntry {
 	int mask;
-    char filename[MAX_FILENAME];
-    struct stat attrs;
-    struct direntry* next;
+	char filename[MAX_FILENAME];
+	struct stat attrs;
+	struct direntry* next;
 };
 
 /* Linked list of directory items. */
 struct direntrylist {
-    int count;
-    struct direntry* head;
-    struct direntry* tail;
+	int count;
+	struct direntry* head;
+	struct direntry* tail;
 };
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  create_daemon(const char* name)
  *  Description:  Turns the current running process into a daemon
@@ -106,7 +106,7 @@ struct direntrylist {
  */
 void create_daemon(const char* name);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  send_updates(void* arg)
  *  Description:  Sends updates (if available) to any connected clients.
@@ -122,7 +122,7 @@ void create_daemon(const char* name);
  */
 void* send_updates(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  send_error(int socket, const char* err_msg)
  *  Description:  Sends err_msg to the connected client based on the socket fd
@@ -136,7 +136,7 @@ void* send_updates(void* arg);
  */
 int send_error(int socket, const char* err_msg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  send_error2(int socket, const char* err_msg)
  *  Description:  Sends err_msg to a client that has NOT been added to clients. Mainly
@@ -148,7 +148,7 @@ int send_error(int socket, const char* err_msg);
  */
 int send_error(int socket, const char* err_msg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  disconnect_from_client(int socket, int pipe)
  *  Description:  Sends the disconnect sequence of bytes to client to signal disconnection
@@ -159,12 +159,12 @@ int send_error(int socket, const char* err_msg);
  */
 int disconnect_from_client(int socket, int pipe);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  start_server(int port_number, const char* dir_name, int period)
  *  Description:  Starts the server functionality of dirapp.
  *	  Arguments:  port_number : The port number which to bind the server to
- * 				  dir_name    : The name/path of directory to monitor
+ *                                dir_name    : The name/path of directory to monitor
  *				  period      : Time interval to check for updates
  *        Locks:  None
  *      Returns:  0
@@ -172,7 +172,7 @@ int disconnect_from_client(int socket, int pipe);
  */
 int start_server(int port_number, const char* dir_name, int period);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  signal_thread(void* arg)
  *  Description:  Used to spawn a thread that will handle any incoming signal
@@ -183,7 +183,7 @@ int start_server(int port_number, const char* dir_name, int period);
  */
 static void* signal_thread(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  init_client(int socket)
  *  Description:  Handles a client on a separate thread.
@@ -194,7 +194,7 @@ static void* signal_thread(void* arg);
  */
 void* init_client(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  remove_client(void* arg)
  *  Description:  Stops sending updates to a client
@@ -206,7 +206,7 @@ void* init_client(void* arg);
  */
 void* remove_client(void* arg);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  add_client_ref(int socketfd)
  *  Description:  Adds new client to a list of clients.
@@ -217,7 +217,7 @@ void* remove_client(void* arg);
  */
 void add_client_ref(int socketfd);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  remove_client_ref(int socketfd)
  *  Description:  Removes a client from a list of clients.
@@ -229,19 +229,19 @@ void add_client_ref(int socketfd);
  */
 void remove_client_ref(int socketfd);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  find_client_ref(int socketfd)
  *  Description:  Retrieves a pointer to the partiular client
  *	  Arguments:  socketfd: The socket used to identify the client
  *        Locks:  None
  *      Returns:  A pointer that represents the client given by the socket
- * 		  Free?:  No  
+ *                Free?:  No
  * =====================================================================================
  */
 struct client* find_client_ref(int socketfd);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  init_direntrylist()
  *  Description:  Initializes and returns a new direntrylist
@@ -249,12 +249,12 @@ struct client* find_client_ref(int socketfd);
  *        Locks:  None
  *      Returns:  A pointer that represents a list of entries within a directory or
  *				  NULL if memory could not be allocated
- * 		  Free?:  Yes
+ *                Free?:  Yes
  * =====================================================================================
  */
 struct direntrylist* init_direntrylist();
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  add_direntry(struct direntrylist* list, struct direntry* entry)
  *  Description:  Adds a direntry to a given direntrylist
@@ -266,7 +266,7 @@ struct direntrylist* init_direntrylist();
  */
 int add_direntry(struct direntrylist* list, struct direntry* entry);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  reuse_direntrylist(struct direntrylist* list)
  *  Description:  Removes all direntries in the given list, so the list can be reused
@@ -277,10 +277,10 @@ int add_direntry(struct direntrylist* list, struct direntry* entry);
  */
 void reuse_direntrylist(struct direntrylist* list);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  find_direntry(struct direntrylist* list, struct direntry* entry)
- *  Description:  Finds the corresponding entry with same inode id in the specified 
+ *  Description:  Finds the corresponding entry with same inode id in the specified
  *                direntrylist instance
  *    Arguments:  list  : A directory list to search through
  *				  entry : The entry to find in list
@@ -291,7 +291,7 @@ void reuse_direntrylist(struct direntrylist* list);
  */
 struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  exploredir(struct direntrylist* list, const char* path)
  *  Description:  Builds a direntrylist with the name and attributes of all files in
@@ -305,7 +305,7 @@ struct direntry* find_direntry(struct direntrylist* list, struct direntry* entry
  */
 int exploredir(struct direntrylist* list, const char* path);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  difference_direntrylist()
  *  Description:  Finds all the differences in the monitored directory by setting a
@@ -318,7 +318,7 @@ int exploredir(struct direntrylist* list, const char* path);
  */
 int difference_direntrylist();
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  append_diff(buff, mode, filename, desc)
  *  Description:  Appends the mode, filename, and description of an update to buff
@@ -331,7 +331,7 @@ int difference_direntrylist();
  */
 void append_diff(byte* buff, const char* mode, const char* filename, const char* desc);
 
-/* 
+/*
  * ===  FUNCTION  ======================================================================
  *         Name:  kill_clients(int pipe, const char* message)
  *  Description:  Removes all connected clients
@@ -344,5 +344,4 @@ void append_diff(byte* buff, const char* mode, const char* filename, const char*
  * =====================================================================================
  */
 void kill_clients(int pipe, const char* message);
-
 #endif
